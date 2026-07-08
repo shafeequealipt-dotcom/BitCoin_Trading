@@ -1,0 +1,75 @@
+[Unit]
+Description=Trading Intelligence - Background Workers
+Documentation=https://github.com/user/trading-intelligence-mcp
+# Phase 1 post-Layer-1 fix: Shadow must be ordered before workers so
+# the boot-time burst of "Cannot connect to host 127.0.0.1:9090" ERROR
+# lines (and the resulting fictitious zero-balance state in the fund
+# manager) is eliminated. Wants= keeps Shadow soft-required: workers
+# still start if Shadow is permanently down (degraded mode), but
+# systemd will sequence Shadow first when both are scheduled.
+After=network-online.target shadow.service
+Wants=network-online.target shadow.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=inshadaliqbal786
+Group=inshadaliqbal786
+WorkingDirectory=/home/inshadaliqbal786/trading-intelligence-mcp
+
+# PATH: venv for python + standard dirs for claude CLI binary (/usr/bin/claude)
+Environment="PATH=/home/inshadaliqbal786/.local/bin:/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+# HOME: Claude CLI needs this to find ~/.claude/.credentials.json for OAuth
+Environment="HOME=/home/inshadaliqbal786"
+# LANG: Ensure UTF-8 encoding for subprocess I/O with Claude CLI
+Environment="LANG=C.UTF-8"
+
+# Claude CLI writable-state isolation (2026-06-11 headless-wedge fix).
+# Under ProtectHome=read-only the CLI's default state file ~/.claude.json
+# (at $HOME root, OUTSIDE the writable ~/.claude carve-out) is EROFS —
+# strace-proven on every headless call, and a documented silent-hang class
+# in the CLI when it must persist state (OAuth session refresh, transcript
+# registration). CLAUDE_CONFIG_DIR relocates ALL CLI state into the
+# service-owned writable dir below. Its .credentials.json is a symlink to
+# ~/.claude/.credentials.json so the OAuth token lineage stays shared with
+# interactive sessions (no refresh-token fork).
+Environment="CLAUDE_CONFIG_DIR=/home/inshadaliqbal786/trading-intelligence-mcp/data/claude-config"
+# Block EVERY CLI self-update path inside the service. DISABLE_AUTOUPDATER
+# (in .env) only stops the background check; DISABLE_UPDATES also blocks
+# manual `claude update`/`claude install` code paths. Both 06-09 and 06-10
+# brain outages began at unattended binary flips.
+Environment="DISABLE_UPDATES=1"
+
+EnvironmentFile=/home/inshadaliqbal786/trading-intelligence-mcp/.env
+ExecStart=/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python workers.py
+Restart=always
+RestartSec=15
+
+# Resource limits — needs headroom for Claude CLI (Node.js) subprocess
+# Observed (2026-05-14): Python ~240M, each Claude CLI ~195M, pool can hold
+# multiple subprocesses. Original 600M soft cap was throttling continuously
+# (memory.events.high counter > 182k events). Raised per operator on 2026-05-14.
+MemoryMax=12G
+MemoryHigh=8G
+CPUQuota=80%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+# data/: logs, database, state files (also hosts CLAUDE_CONFIG_DIR above)
+ReadWritePaths=/home/inshadaliqbal786/trading-intelligence-mcp/data
+# .claude/: OAuth credential file (needed for token refresh by Claude CLI)
+ReadWritePaths=/home/inshadaliqbal786/.claude
+# claude-cli-nodejs cache: MCP debug logs — without this every headless call
+# burns hundreds of EROFS retries writing mcp-logs-* (strace-proven 2026-06-11)
+ReadWritePaths=/home/inshadaliqbal786/.cache/claude-cli-nodejs
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging — application handles its own logging to data/logs/
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

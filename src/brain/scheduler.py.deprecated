@@ -1,0 +1,153 @@
+"""Brain scheduler: controls when Claude is called (scheduled + signal-triggered)."""
+
+import asyncio
+import time
+
+from src.config.settings import Settings
+from src.core.exceptions import BrainError
+from src.core.logging import get_logger
+from src.brain.claude_client import ClaudeClient
+from src.brain.cost_tracker import CostTracker
+from src.brain.decision_parser import DecisionParser
+from src.brain.executor import BrainExecutor
+from src.brain.prompt_builder import PromptBuilder
+from src.brain.prompts import SYSTEM_PROMPT
+
+log = get_logger("brain")
+
+
+class BrainScheduler:
+    """Controls when the Brain calls Claude: scheduled + signal-triggered.
+
+    Args:
+        settings: Application settings.
+        claude_client: Claude API client.
+        prompt_builder: Prompt builder.
+        decision_parser: Decision parser.
+        executor: Trade executor.
+        cost_tracker: Cost tracker.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        claude_client: ClaudeClient,
+        prompt_builder: PromptBuilder,
+        decision_parser: DecisionParser,
+        executor: BrainExecutor,
+        cost_tracker: CostTracker,
+        alert_manager=None,
+    ) -> None:
+        self.settings = settings
+        self.claude = claude_client
+        self.builder = prompt_builder
+        self.parser = decision_parser
+        self.executor = executor
+        self.cost_tracker = cost_tracker
+        self.alert_manager = alert_manager
+        self.last_call_time: float = 0
+        self.min_interval = float(getattr(settings.brain, 'analysis_interval', 60))
+        self.schedule_interval = float(settings.brain.analysis_interval)
+        self._last_prompt_hash: str = ""
+        self._running = False
+
+    async def start(self) -> None:
+        """Start the scheduler loop."""
+        self._running = True
+        log.info(
+            "Brain scheduler started (interval={i}s, signal_trigger={st})",
+            i=self.schedule_interval, st=self.settings.brain.signal_triggered,
+        )
+
+        while self._running:
+            try:
+                if time.time() - self.last_call_time >= self.schedule_interval:
+                    await self._run_analysis("scheduled")
+                await asyncio.sleep(30)
+            except BrainError as e:
+                log.error("Brain scheduler error: {err}", err=str(e))
+                await asyncio.sleep(60)
+            except Exception as e:
+                log.error("Unexpected brain error: {err}", err=str(e))
+                await asyncio.sleep(60)
+
+    async def stop(self) -> None:
+        """Stop the scheduler."""
+        self._running = False
+        log.info("Brain scheduler stopped")
+
+    async def run_once(self) -> dict:
+        """Run a single analysis cycle.
+
+        Returns:
+            Result dict with context, response, decision, execution_result, cost.
+        """
+        return await self._run_analysis("manual")
+
+    async def _run_analysis(self, trigger: str) -> dict:
+        """Execute one full analysis cycle.
+
+        Args:
+            trigger: What triggered this analysis.
+
+        Returns:
+            Result dict.
+        """
+        # Cost guard
+        if not self.cost_tracker.can_afford_call():
+            log.warning("Brain: daily budget exceeded, skipping")
+            return {"skipped": True, "reason": "budget_exceeded"}
+
+        # Interval guard
+        elapsed = time.time() - self.last_call_time
+        if elapsed < 30 and trigger != "manual":
+            return {"skipped": True, "reason": "too_soon"}
+
+        # Build context and prompt
+        context = await self.builder.build_market_context()
+        prompt = self.builder.build_prompt(context)
+
+        # Dedup guard
+        prompt_hash = self.builder.compute_prompt_hash(prompt)
+        if prompt_hash == self._last_prompt_hash and trigger != "manual":
+            log.debug("Brain: skipping duplicate prompt")
+            return {"skipped": True, "reason": "duplicate_prompt"}
+
+        # Call Claude
+        log.info("Brain: calling Claude ({trigger})", trigger=trigger)
+        response = await self.claude.analyze_market(prompt, SYSTEM_PROMPT)
+
+        # Parse decision
+        decision = self.parser.parse(response["text"])
+        issues = self.parser.validate_decision(decision, self.settings)
+
+        # Execute if valid
+        execution_result = None
+        if decision.action != "hold" and decision.confidence >= self.settings.brain.min_signal_confidence and not issues:
+            execution_result = await self.executor.execute(decision)
+            log.info("Brain action result: {r}", r=execution_result)
+        else:
+            log.info(
+                "Brain holding: action={a}, conf={c:.2f}, issues={i}",
+                a=decision.action, c=decision.confidence, i=issues,
+            )
+
+        self.last_call_time = time.time()
+        self._last_prompt_hash = prompt_hash
+
+        # Send Telegram alert for every brain decision
+        if self.alert_manager:
+            try:
+                await self.alert_manager.send_brain_decision_alert(
+                    decision, trigger, response.get("cost_usd", 0),
+                )
+            except Exception as e:
+                log.warning("Failed to send brain alert: {err}", err=str(e))
+
+        return {
+            "trigger": trigger,
+            "decision": decision.to_dict(),
+            "execution_result": execution_result,
+            "cost_usd": response.get("cost_usd", 0),
+            "issues": issues,
+        }

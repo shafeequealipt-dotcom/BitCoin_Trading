@@ -1,0 +1,39 @@
+Process 384: /home/inshadaliqbal786/shadow/.venv/bin/python shadow.py
+Python v3.10.12 (/usr/bin/python3.10)
+
+Thread 0x783CC4096000 (idle): "MainThread"
+    select (selectors.py:469)
+    _run_once (asyncio/base_events.py:1871)
+    run_forever (asyncio/base_events.py:603)
+    run_until_complete (asyncio/base_events.py:636)
+    run (asyncio/runners.py:44)
+    <module> (shadow.py:316)
+Thread 0x783CC15FF640 (active): "loguru-writer-2"
+    _recv (multiprocessing/connection.py:379)
+    _recv_bytes (multiprocessing/connection.py:414)
+    recv_bytes (multiprocessing/connection.py:216)
+    get (multiprocessing/queues.py:365)
+    _queued_writer (loguru/_handler.py:300)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 0x783CC0DFE640 (active): "Thread-1 (_connection_worker_thread)"
+    _connection_worker_thread (aiosqlite/core.py:59)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 0x783CBBFFF640 (active): "asyncio_0"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 0x783CBB7FE640 (active): "asyncio_1"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 0x783CBAFFD640 (active): "asyncio_2"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)

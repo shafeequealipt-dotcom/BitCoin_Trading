@@ -1,0 +1,3524 @@
+# =============================================================================
+# Trading Intelligence MCP — Master Configuration
+# =============================================================================
+# All settings for the entire system. Env vars override values here.
+# Copy .env.example → .env and fill in your API keys.
+# =============================================================================
+
+[general]
+# Trading mode:
+#   "shadow"     — Shadow virtual exchange (default; localhost:9090 paper exec)
+#   "bybit_demo" — Bybit demo trading (api-demo.bybit.com paper-money exec)
+#   "bybit"      — Bybit mainnet (live; reserved for future live-trading project)
+#   "paper"      — Bybit testnet via pybit (legacy; superseded by bybit_demo)
+#   "live"       — Real funds (requires explicit confirmation)
+#
+# T6-1 / Phase5 F-2 fix (six-tier-fixes 2026-05-11) — aligned the
+# config-default mode with the persisted runtime state in
+# transformer_state (mode=bybit_demo since 2026-05-08). The previous
+# stale "shadow" default did not affect runtime (the DB-persisted mode
+# wins via transformer_state.id=1) but was a recurring operator-
+# confusion source on cold-start audit reads.
+mode = "bybit_demo"
+# Shadow API URL (only used when mode = "shadow")
+shadow_api_url = "http://127.0.0.1:9090"
+# Timezone for display (internal always UTC)
+timezone = "UTC"
+# How verbose: DEBUG, INFO, WARNING, ERROR
+log_level = "INFO"
+# Directory for log files (relative to project root)
+log_dir = "data/logs"
+
+[bybit_demo]
+# Bybit demo (paper money) execution adapter. Activate by setting
+# [general] mode = "bybit_demo" and providing demo API credentials in
+# .env (BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET). Switching is
+# operator-driven via Telegram with a process restart between exchanges.
+enabled = true
+base_url = "https://api-demo.bybit.com"
+# Bybit recv-window in milliseconds.
+recv_window = 5000
+# Per-request timeout (seconds).
+timeout_seconds = 10.0
+# Retry budget for transient transport / 5xx / 429 errors.
+retry_attempts = 5
+# Base for exponential backoff (0.2 * 2^(n-1)).
+retry_base_delay_seconds = 0.2
+# ── PnL-truth provenance (2026-06-07) ──
+# How the WS self-close path resolves the authoritative close PnL.
+#   "ws_exec" — identity-match the exchange closed-pnl row by the close
+#               order_id/qty (the TRUTH path; activates the already-wired
+#               identity resolver). This is the fix default.
+#   "gated"   — match on price+qty only.
+#   "legacy"  — single-shot rows[0] (rollback only; the stale-row source that
+#               booked the gross fallback and produced the sign-flip).
+close_pnl_source = "ws_exec"
+# When the exchange closed-pnl row is not yet indexed at book time, book the WS
+# net tagged provisional (never a final win) and reconcile when it arrives.
+close_pnl_provisional = true
+close_pnl_reconcile = true
+close_pnl_reconcile_max_attempts = 10
+close_pnl_reconcile_interval_s = 1.0
+close_pnl_reconcile_total_budget_s = 30.0
+# Phase 1 residual fix (2026-06-08) — reconcile exit-plausibility gate. The
+# reconcile channel bypasses on_trade_closed's staleness gate, and the resolver's
+# qty gate is inert once the trade state is popped, so a stale same-symbol
+# closed-pnl row (qty-only match) could be booked as a phantom (proven live:
+# NEAR exit 2.3379 vs the trade's ~2.07 band => a -$75.83 loss booked as +$18.52).
+# A reconcile is REJECTED (provisional kept, retry continues) when the resolved
+# exchange exit price diverges from the provisional close's exit by more than this
+# percent. Set generous enough to allow real slippage + fee-driven sign flips
+# (same exit), tight enough to catch a wrong-trade row. 0 disables the gate.
+close_pnl_reconcile_max_exit_divergence_pct = 3.0
+
+[bybit]
+# Bybit mainnet for REAL market data. Orders routed via Transformer to Shadow (paper).
+testnet = false
+# Fallback symbols (used when bulk ticker API fails). Scanner dynamically
+# selects top 20 by score from all Bybit USDT perps on each scan cycle.
+default_symbols = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT", "1000PEPEUSDT",
+    "WIFUSDT", "HYPEUSDT", "AAVEUSDT", "NEARUSDT", "APTUSDT",
+    "ARBUSDT", "OPUSDT", "LTCUSDT", "BCHUSDT", "TONUSDT",
+]
+# Rate limit: max requests per second to Bybit REST API
+rate_limit_per_second = 10
+# WebSocket ping interval in seconds
+ws_ping_interval = 20
+# Reconnect delay on WS disconnect (seconds)
+ws_reconnect_delay = 5
+# Order receive window in milliseconds
+recv_window = 5000
+
+[finnhub]
+# Enable Finnhub news + calendar integration
+enabled = false
+# Rate limit: Finnhub free tier allows 60 calls/min
+rate_limit_per_minute = 60
+# Categories to fetch: general, forex, crypto, merger
+news_categories = ["crypto", "general"]
+# Max articles to fetch per poll
+max_articles_per_fetch = 50
+
+[reddit]
+# Enable Reddit sentiment analysis via PRAW
+enabled = false
+# Subreddits to monitor for crypto sentiment
+subreddits = ["cryptocurrency", "bitcoin", "ethtrader", "CryptoMarkets", "solana"]
+# Max posts to fetch per subreddit per poll
+max_posts_per_sub = 25
+# Minimum score threshold to consider a post relevant
+min_score = 10
+# Rate limit: Reddit allows ~60 requests/min with OAuth
+rate_limit_per_minute = 60
+
+[ta]
+# Technical Analysis engine settings.
+#
+# confidence_ema_alpha controls the EMA smoothing applied to
+# overall.confidence in TAEngine._compute_overall_signal. Pre-fix the
+# raw `dominant_indicators / total_indicators` ratio swung 0.14 on a
+# single indicator flip (RSI crossing 50, MACD histogram zero-cross),
+# which propagated into the TradeScorer Context block (threshold-cross
+# at 0.6 → 10 ↔ 0 swing) and produced cycle-to-cycle Context flapping
+# on identical structural inputs.
+#
+# Smoothed: confidence = alpha * raw + (1 - alpha) * prev_confidence
+# alpha = 0.4 keeps the response within ~3 cycles for genuine state
+# changes while halving cycle-to-cycle variance on indicator noise.
+# Set 1.0 to disable smoothing (legacy behaviour).
+confidence_ema_alpha = 0.4
+
+# Item 4 (entry-gaps investigation 2026-05-26): compute volume_sma_ratio on the
+# last CLOSED candle, excluding the still-forming newest bucket whose partial
+# volume biases the ratio low. Default false keeps legacy behaviour. See
+# ENTRY_GAPS_AND_TIMEFRAME_INVESTIGATION_FINDINGS.md.
+volume_ratio_use_closed_candle = true
+
+[altdata]
+# Enable alternative data collection (Fear & Greed, funding rates, etc.)
+enabled = true
+# Fear & Greed index poll interval in seconds (API updates ~daily)
+fear_greed_interval = 3600
+# Funding rate poll interval in seconds
+funding_rate_interval = 300
+# Open interest poll interval in seconds
+open_interest_interval = 600
+# CoinGecko rate limit (free tier: 10-30 calls/min)
+coingecko_rate_limit_per_minute = 10
+
+[database]
+# SQLite database path (relative to project root)
+path = "data/trading.db"
+# WAL mode for concurrent reads during writes
+wal_mode = true
+# Connection pool size (for future PostgreSQL migration)
+pool_size = 5
+# Query timeout in seconds
+query_timeout = 30
+# Auto-vacuum interval in hours
+vacuum_interval = 24
+# Phase 1 (D-3 fix) — chunk size for MarketRepository.save_klines.
+# A single executemany over the full per-(symbol, timeframe) batch held
+# the DatabaseManager lock for 12-20 s during heavy ticks, queueing every
+# other worker behind it. Chunking + yielding the loop between chunks
+# eliminates that contention without changing total wall-clock work.
+kline_save_chunk_size = 500
+# Phase 1 (D-3 fix) — WAL checkpoint scheduler cadence (in kline_worker
+# ticks). PASSIVE checkpoints never block, so it's safe to schedule
+# them often. The historical 100 MiB pinned -wal file disappeared once
+# we stopped relying on opportunistic auto-checkpoint + hourly cleanup.
+#
+# 2026-04-29 update — set to 1 (every kline tick = every 5 min) after
+# observing the WAL re-grow to 100 MiB on a fresh process within 25 min:
+# kline_worker fires every 5 min (interval=300s), so cadence=50 deferred
+# the first scheduled checkpoint by 250 min, and cleanup_worker's hourly
+# checkpoint hadn't fired yet either. With ubiquitous readers
+# (position_watchdog every 10s, profit_sniper every 5s, 19 workers
+# total), PASSIVE checkpoints typically come back busy=non-zero, so
+# reclamation depends on the busy-escalation chain (3 consecutive busy
+# → TRUNCATE). At cadence=50 that's 200 ticks = 16+ hours between
+# TRUNCATE escalations. At cadence=1, the same chain reclaims at most
+# every 15 min. PASSIVE itself does partial reclaim each call.
+wal_checkpoint_every_n_kline_ticks = 1
+# Phase 1 (D-3 fix) — escalate to TRUNCATE if PASSIVE checkpoints come
+# back busy this many times in a row. TRUNCATE briefly blocks writers
+# but fully reclaims WAL space when readers consistently pin snapshots.
+wal_checkpoint_truncate_after_busy_count = 3
+# Phase 1 (D-3 fix) — DB_LOCK_WAIT warn threshold (ms). Drop to 500 ms
+# during verification to see finer-grained contention, then raise back.
+db_lock_wait_threshold_ms = 1000
+# Phase conn-pool/p3-9 (db-concurrency-refactor 2026-05-14) — selects the
+# DatabaseManager concurrency engine. The only supported value is
+# "reader_pool" (N reader connections + 1 writer connection). The
+# historical "single_lock" engine was removed after 2 hours of stable
+# production (99%+ lock-wait reduction, 100% cascade elimination); the
+# code path is no longer present and the field is rejected by the
+# settings validator. Setting retained for forward-compat with future
+# per-domain engine selection. Override at runtime via the
+# DATABASE_CONCURRENCY_MODEL env var.
+concurrency_model = "reader_pool"
+# Phase conn-pool/p3-1 — number of aiosqlite reader connections opened at
+# boot under the "reader_pool" engine. The final value is chosen from the
+# Phase 3.5 stress-test sweep (2 / 4 / 8 / 12). Default 4 is a placeholder.
+reader_pool_size = 4
+
+[workers]
+# Enable background data collection workers
+enabled = true
+# Market data worker: OHLCV + ticker polling interval (seconds)
+market_data_interval = 45
+# News worker: Finnhub polling interval (seconds)
+news_interval = 300
+# Reddit worker: sentiment polling interval (seconds)
+reddit_interval = 600
+# Alt data worker: funding rates, OI, Fear & Greed interval (seconds)
+altdata_interval = 300
+# Health check interval: how often workers report status (seconds)
+health_check_interval = 120
+# Max consecutive failures before worker restarts
+max_consecutive_failures = 5
+# Worker restart delay (seconds)
+restart_delay = 10
+
+# ─────────────────────────────────────────────────────────────────────
+# Sweet-spot scheduling — corrected Layer 1 architecture (Phase 1).
+#
+# The 7 data workers fire at these MM:SS offsets within every 5-minute
+# window. Chain ordering is enforced (kline → structure → signal →
+# regime → strategy → scanner) so each downstream worker reads warm
+# upstream data. PriceWorker is continuous (no sweet spot needed).
+# Bad MM:SS values or out-of-order chain → ConfigError at startup.
+#
+# Reference: LAYER1_CORRECTED_ARCHITECTURE_BLUEPRINT.md §8.
+# ─────────────────────────────────────────────────────────────────────
+[workers.sweet_spots]
+window_minutes = 5
+kline_worker = "0:30"
+structure_worker = "0:45"
+signal_worker = "1:00"
+regime_worker = "1:15"
+strategy_worker = "1:30"
+scanner_worker = "4:00"
+
+[workers.sweet_spots.altdata]
+# Funding rates: MM:SS within window, between regime (1:15) and scanner (4:00).
+funding_rates = "1:45"
+# Open interest: every N minutes, independent of window.
+open_interest_minutes = 5
+# Five-Fix Follow-Up — Fix 2 (fresh OI, 2026-06-10): the exchange snapshot
+# granularity the fetch asks for. The cadence above was already 5-minute, but
+# the fetch requested "1h" snapshots, so every 5-minute fetch stored the same
+# hourly plateau value and the brain's oi_change_pct froze identical across
+# cycles (proven: ALGO stored 71256914.0 for ten straight 5-minute rows).
+# "5min" makes each fetch a genuinely fresh snapshot. Allowed: 5min, 15min,
+# 30min, 1h, 4h, 1d. Set "1h" to restore the prior behaviour.
+open_interest_interval = "5min"
+# Fear & Greed: every M minutes, hourly default.
+fear_greed_minutes = 60
+
+[brain]
+# Claude Code CLI — no API key needed, no budget limit
+# Uses existing Claude Max subscription ($0 per call)
+enabled = true
+use_claude_code = true
+# Brain provider switch (2026-07-06, operator request): "claude_code"
+# (default above) or "glm_cloudflare" (GLM-5.2 via Cloudflare Workers AI,
+# see src/brain/glm_client.py). Set back to "claude_code" to instantly
+# revert to the battle-tested Claude Code CLI path.
+provider = "glm_cloudflare"
+glm_model = "@cf/zai-org/glm-5.2"
+# GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
+# before the final answer. max_tokens must cover both or content truncates
+# empty. timeout is generous since reasoning models are slower than Claude.
+glm_timeout_seconds = 240.0
+glm_max_tokens = 8000
+glm_temperature = 0.3
+glm_max_retries = 2
+# Item 2 (entry-gaps investigation 2026-05-26): append an expected-winner-
+# magnitude advisory (MAG=HIGH/MED/LOW, from entry M5 volatility class) to each
+# coin's volatility line in the strategist prompt. Advisory only; never gates or
+# resizes. Default false. See ENTRY_GAPS_AND_TIMEFRAME_INVESTIGATION_FINDINGS.md.
+entry_magnitude_advisory_enabled = true
+# Issue 4 (CALL_A exploit/fetch, 2026-06-05) — strategy-evidence freshness.
+# A coin's "Strategies: N fired" consensus read older than this many seconds is
+# labelled STALE on the zero-fired line so the brain weighs a stale two-sided
+# lean cautiously. About 1.2x the ~300s strategy cadence. Tuning starting point.
+consensus_freshness_seconds = 360
+# Issue 5 (CALL_A exploit/fetch, 2026-06-05) — exploitation breadth targets. The
+# CALL_A prompt tells the brain to WORK to surface the genuine plays it overlooks
+# (around three per cycle), preferring shorter holds and smaller sizes, while
+# never fabricating a counter-evidence trade. These are the named tuning targets
+# the per-cycle STRAT_CALL_A_ACTIVITY observability line measures against — NOT a
+# quota and NOT an on/off lever. Tuning starting points.
+# 2026-07-07 (win-rate enhancement Phase B): lowered 3 -> 2 alongside
+# top_n_to_brain 5 -> 3. Prompt-level guidance toward fewer, better plays;
+# never a quota. Rollback: 3.
+brain_target_play_count = 2
+brain_preferred_hold_minutes_max = 25
+
+# Definitive-fix Phase 6 (2026-04-28): cold-start completeness gate.
+# Forensic E.2.4 captured first-cycle packages at completeness=0.67
+# (XRAY/regime/F&G caches still warming up) — auto-execute fired and
+# placed losing trades on incomplete data. The gate fires BEFORE
+# Claude is called: the cycle is short-circuited and a Telegram alert
+# warns the operator. ``boot_grace_*`` is the stricter gate during
+# the first ``boot_grace_period_sec`` seconds after process start.
+# Layer 1 restructure Phase 7 — when true, the strategist reads
+# per-coin sections from layer_manager._coin_packages instead of
+# querying 12 services per cycle. Set false to fall back to the
+# legacy service-query path during Phase 9 observation if a
+# regression is detected.
+use_packages = true
+# Phase 9 cutover (2026-05-01): flipped default to true. The strategist
+# surfaces the Phase 3/4 briefing fields (state_label, action_hint,
+# interestingness_score, votes block) in the per-coin TRADE CANDIDATES
+# block AND extends TRADE_SYSTEM_PROMPT with one new section that
+# teaches Claude how to read those fields. Set false to roll back to
+# the legacy prompt shape instantly.
+surface_briefing_fields = true
+# Brain-prompt-enrichment Phase 3.1 (2026-05-16) — number of strategy
+# voters surfaced per candidate in the TRADE CANDIDATES block. Replaces
+# the legacy "Top BUY" + "Top SELL" sub-blocks of 3 each with a single
+# "Top-N" line ranked across all directions by confidence*weight. Set
+# to 3 to mimic the prior 6-name budget; set to 0 to suppress the line
+# entirely. Gated by surface_briefing_fields above.
+surface_top_n_voters = 10
+# Brain-prompt-enrichment Phase 3.2 (2026-05-16) — when true, emit a
+# one-line opposition characterization after the Top-N voters line for
+# each candidate. Tells the brain WHICH side opposes, how many strong
+# opposing voters fired, and the opposing vs agreeing weighted sums.
+# Tiers: NEGLIGIBLE / WEAK / MODERATE / STRONG. Set false to suppress.
+emit_vote_opposition = true
+# Brain-prompt-enrichment Phase 3.3 (2026-05-16) — when true, emit a
+# one-line per-coin strategy-category vote split. Brain reads how
+# cross-category the agreement is (more robust) vs one-category
+# cluster (weaker). NEUTRAL votes excluded — only directional votes
+# contribute. Set false to suppress.
+emit_category_split = true
+# Candidate-Block Data Integrity Fix — Issue 1 (2026-06-09) — when true,
+# the CALL_A candidate block labels a genuine direction disagreement
+# explicitly: an "inputs disagree" note when the intelligence Signal
+# direction or the strategy-ensemble lean contradicts the X-RAY structural
+# direction on the same coin, the one-sided "Votes" line relabeled as the
+# confirmed-direction tally, and the Two-sided poll rendered whenever
+# two-sided polling is active. Presentation only — no signal/vote value is
+# recomputed; structure/regime stay authoritative for direction. Set false
+# to restore the prior one-sided rendering with no code change.
+emit_direction_disagreement_notes = true
+# Candidate-Block Data Integrity Fix — Issue 4 (2026-06-09) — when true, the
+# per-coin Components line holds the global fear_greed index out of the
+# magnitude-ranked top-5 (where it always crowded the real per-coin signals)
+# and appends it once tagged "(global, direction-inactive)". Presentation only;
+# fear-greed remains inactive for signal direction regardless. Set false to
+# restore the prior magnitude ranking.
+fear_greed_components_demote_enabled = true
+# Five-Fix Follow-Up — Fix 1 (components purity, 2026-06-10) — when true, the
+# per-coin Components line excludes the internal classifier diagnostics
+# (confidence_floor_failed, confidence_below_strong, confidence_below_buy,
+# original_signal_type) so the brain sees only genuine market inputs.
+# Presentation only: the diagnostics stay in the Signal.components dict for the
+# database, X-RAY and tests. Set false to let future NUMERIC diagnostics back
+# into the ranking; boolean values never render as numbers regardless (type
+# guard, unconditional).
+components_diagnostics_excluded = true
+# Conditional X-RAY authority (2026-06-11) — live wrong-side evidence: the
+# disagreement notes told the brain "structure/X-RAY is authoritative for
+# direction" even when X-RAY itself graded the setup SKIP (HBAR score 30,
+# shorted against a unanimous 26-strategy long poll at the range floor) or
+# tagged it COUNTER-TRADE (HYPE conf 0.22, shorted at range_pos 0.00). When
+# true, the authority clause applies only when the X-RAY read is tradeable by
+# its own flags; weak reads get a WEAK-read note pointing at the ensemble
+# lean and per-coin regime instead, and the same-side action hint is
+# withheld. min_score mirrors the scorer SKIP cutoff (C >= 45). Set false to
+# restore the prior unconditional authority framing.
+xray_authority_conditional_enabled = true
+xray_authority_min_score = 45.0
+# Brain-Awareness Prompt Additions — Addition 2 (2026-06-09) — book-tilt
+# awareness. When true, the ACCOUNT section shows the open book's long-vs-short
+# composition and a compact tilt label, with a NEUTRAL consider-note when the
+# book is tilted, so the brain can see when a new same-direction trade piles onto
+# an already one-sided book. Awareness only — no block, no cap, no suppression.
+# Set false for instant rollback. book_tilt_small_count: abs(long-short) <= this
+# reads "balanced". book_tilt_one_sided_ratio: majority/minority >= this (or one
+# side zero) reads "heavily <dir>-tilted"; in between reads "<dir>-leaning".
+book_tilt_enabled = true
+book_tilt_small_count = 2
+book_tilt_one_sided_ratio = 3.0
+# Four-Element Prompt Recalibration, Element 1 (2026-06-11) — the re-keyed
+# quality-over-quota skip-permission thresholds, injected into both CALL_A
+# system prompts. June-11 forensics: the dead-thin-zero-fired cluster (zero
+# strategies fired AND dead regime AND volume ratio at or below the threshold)
+# lost all 11 submissions (IMX vol_ratio 0.229, MON 0.043 — 0.25 is the
+# tightest round value covering both), and every coin attempted 6 or more
+# times in the session lost (DYDX 24, INJ 9, IMX 7; all winners at 5 or
+# fewer). Permission language only — the brain still decides freely on every
+# coin; no gate, no exclusion. quality_skip_heavy_attempts is shared with the
+# Element 2 session-attempts line so prompt words and rendered fact never
+# drift apart.
+quality_skip_thin_vol_ratio = 0.25
+quality_skip_heavy_attempts = 6
+# Four-Element Prompt Recalibration, Element 2 (2026-06-11) — per-coin
+# session-attempt awareness line in CALL_A ("Session today: N attempts, net X
+# USD"; a heavy losing coin additionally names the quality-over-quota skip
+# permission). Computed READ-ONLY from trade_log for the current UTC day in
+# the ACTIVE exchange mode; a fresh coin renders nothing; the heavy threshold
+# is quality_skip_heavy_attempts above. Awareness only — no gate. Set false
+# for instant rollback of the line.
+session_attempts_enabled = true
+# Four-Element Prompt Recalibration, Element 4 (2026-06-11) — session-liveness
+# line under the market context ("Session liveness: thin — 4 of 5 measured
+# candidates at or below volume ratio 0.25."). June-11: 40 percent of blocks
+# had vol_ratio below 0.05 and 49 of 62 loss submissions fell in the
+# 04:00-10:00 UTC trough, with nothing in the prompt saying the tape was dead.
+# Computed from the finalized candidate set's measured volume ratios, zero new
+# I/O; context only, NOT a trading-hours restriction — the brain may take a
+# genuine play at any hour. Thin share >= thin_min_thin_share reads thin;
+# <= live_max_thin_share reads live; between reads mixed. Set
+# session_liveness_enabled = false for instant rollback of the line.
+session_liveness_enabled = true
+session_liveness_thin_vol_ratio = 0.25
+session_liveness_live_max_thin_share = 0.20
+session_liveness_thin_min_thin_share = 0.60
+# Brain-prompt-enrichment Phase 3.4 (2026-05-16) — when true, emit a
+# single "TODAY DIRECTION PERF" line in CALL_B (position management)
+# after the TODAY PnL line. Format: "Longs NW/ML (X% WR) | Shorts ...".
+# Suppressed when zero trades have closed today on either side.
+# CALL_B only — the aggressive-framing rewrite intentionally removed
+# this from CALL_A to avoid recency bias on new-trade decisions.
+emit_direction_perf_in_callb = true
+# Brain-prompt-enrichment Phase 3.5 (2026-05-16) — when true, query
+# trade_intelligence (TIAS Phase 2 ds_why + ds_what_should_done) for
+# recent losses matching (symbol, side, regime) and inject one-line
+# lesson context into CALL_A per-coin block under RECENT_LOSER_COOLDOWN
+# flag. CALL_B intentionally excluded — the Post-Execution Closure Fix
+# (2026-05-05) removed TIAS lessons from CALL_B after a closed-loop
+# premature-close failure. Look-back default 336 hours (14 days).
+# Max 2 lessons per coin. Set false to suppress.
+emit_recent_loss_context = true
+recent_loss_lookback_hours = 336
+recent_loss_max_lessons = 2
+# Direction-reconcile fix (2026-06-04, Problem 6 / F22) — max chars of a TIAS
+# loss-lesson "Cause:" excerpt (was a hard 57-char cut that dropped the failure
+# pattern mid-sentence). Clause/sentence-boundary aware so it never cuts a word.
+tias_cause_max_chars = 120
+# Strategic review interval (seconds) — alternating Call A (trades) / Call B (positions)
+# 150s = 2.5 min between calls, giving 5 min per call type
+strategic_interval = 150
+# Watchdog Claude review interval (seconds) — reviews positions every 30s
+watchdog_interval = 30
+# Legacy settings kept for backward compatibility
+analysis_interval = 900
+signal_triggered = true
+min_signal_confidence = 0.45
+max_calls_per_hour = 30
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.3
+
+# Claude CLI subprocess timing (Phase 2 session-stability fix — Y-22 + timeout retune)
+# Hard cap on one Claude CLI invocation. Was hardcoded 300 in manager.py.
+claude_cli_timeout_seconds = 300
+# Retries after failure (non-retryable errors — auth, billing — still skip retry).
+claude_cli_max_retries = 2
+# Floor between consecutive Claude CLI invocations (adaptive interval).
+claude_cli_min_interval = 2.0
+# Brain-CLI model pin (2026-05-30). The trading brain's `claude -p` calls are
+# latency-critical and must return terse JSON within the first-byte deadline.
+# With NO model pin the CLI defaults to the heaviest tier (claude-opus-4-8[1m]),
+# which takes ~240s of deep reasoning on the full 24.7K trade prompt (measured)
+# and breaches the 300s deadline -> CLAUDE_PROC_KILLED / total_timeout. Pinning
+# Opus 4.7 keeps Opus-tier decision quality while returning clean JSON in ~78s
+# (measured), well under the deadline. This is NOT a CLI downgrade — the binary
+# (2.1.x) is unchanged; only the per-call --model is pinned for the brain, so the
+# operator's interactive default (Opus 4.8) is untouched. Set to "" (empty) to
+# pass no --model and fall back to the CLI default (instant revert).
+claude_cli_model = "claude-opus-4-7"
+# P2-1 (2026-05-13) — first-byte deadline. The operator's complete pipeline
+# takes ~4 min per cycle, with the Claude API alone contributing 2+ min for
+# the first byte on large CALL_A prompts (today's healthy first-byte p50 is
+# 123 s, p99 is 247 s). The default of 90 s in BrainSettings is too aggressive
+# for this cadence — it false-positives on the majority of legitimate slow
+# calls. Setting this to match claude_cli_timeout_seconds keeps the new
+# CLAUDE_PROC_FIRST_BYTE_DEADLINE observability tag (which fires only when
+# the call has produced ZERO stdout by the deadline, distinguishing it from
+# a streaming-failed total timeout) while preventing false positives on
+# healthy slow calls. Set to 0 to disable entirely.
+claude_cli_first_byte_timeout_seconds = 300
+# INCIDENT FIX (2026-05-31): force cold-spawn by disabling prewarm reuse.
+# Root cause: after the 13:55 restart, REUSED prewarmed `claude -p` workers
+# (kept alive by the H1 newline-keepalive, then parked 5-10 min) hung producing
+# ZERO stdout for the full 300 s first-byte deadline, then were killed — every
+# CALL_A failed (status=failed trades=0) for 75+ min. Fresh COLD-spawned workers
+# (immediate prompt+EOF, no keepalive park) were verified working in 3-5 s on the
+# same CLI 2.1.158 / opus-4-7 / valid creds. max_age=0 makes the pool dispose
+# every prewarmed worker on acquire (age > 0 always) and fall through to the
+# proven cold-spawn path (claude_code_client.py:1587-1616). Cold-spawn cost is
+# ~0.6 s — negligible vs first-byte. Revert to 900 once the keepalive-park is
+# fixed for the current CLI. first_byte stays 300 (legit first-byte p99=247 s).
+#
+# RECURRENCE FIX (2026-06-02): the CLI auto-updated 2.1.158 -> 2.1.160 and the
+# keepalive-park hang came back (every CALL_A timing out, brain dead after each
+# VM restart). Root cause confirmed: parked `claude -p` workers (stdin held open
+# by the H1 keepalive) hang on 2.1.160 producing zero stdout; an immediate
+# prompt+EOF cold-spawn works in ~3 s on the same CLI.
+#
+# SAFE RE-ENABLE (F28, 2026-06-05): CLI is now 2.1.165 and the hang NO LONGER
+# reproduces — a parked-worker reproduction showed the parked worker responding in
+# ~4 s (faster than cold). Rather than blindly re-enable (the hang recurs on each
+# auto-update) the pool now gates reuse on an out-of-band CANARY: a throwaway
+# worker is keepalive-parked and must answer a trivial prompt within a short
+# deadline before reuse is trusted, re-confirmed every
+# claude_cli_prewarm_canary_ttl_seconds. If a future CLI starts hanging parked
+# workers the canary catches it OFF the hot path, the pool self-disables to
+# cold-spawn, and a CALL_A is never blocked again. So max_age is restored to 900.
+# NOTE: re-enabling removes only the ~50 ms cold-spawn cost; it does NOT reduce the
+# 60-200 s first-token latency, which is Anthropic-API server-side, not spawn.
+# first_byte stays 300 (legit first-byte p99=247 s). Set max_age=0 to fully
+# disable prewarm again (canary then never runs; brain always cold-spawns).
+claude_cli_prewarm_max_age_seconds = 900
+# F28 (2026-06-05) — warm-pool canary re-confirmation interval (seconds). The
+# canary re-verifies the current CLI serves a parked worker without hanging this
+# often (and on the first calls after boot). Lower = faster detection of a CLI
+# that starts hanging, at the cost of a trivial probe call more often.
+claude_cli_prewarm_canary_ttl_seconds = 600
+# Issue 1 (latency, 2026-06-06) — CALL_A first-token time is the model THINKING
+# before it answers, NOT process spawn. Proven over 1200 live samples:
+# first_token_ms correlates with prompt size at r=0.80 but with pool-hit at only
+# r=0.01, and cold-spawn is ~49 ms; the warm pool is already enabled and does not
+# reduce the 60-163 s wait. The brain runs `claude -p --model claude-opus-4-7`
+# with NO --effort flag, so it thinks at the CLI default (high) effort. These
+# flags trim that overhead. Each is independently reversible: set
+# claude_cli_effort = "" to drop --effort (CLI default), or set a bool false to
+# drop that flag. All-off is byte-identical to the pre-Issue-1 invocation.
+#   effort: Opus 4.7 adaptive-thinking depth (low|medium|high|xhigh|max). "medium"
+#           is the chosen first step down from the default; "" disables the flag.
+claude_cli_effort = "medium"
+#   bare: skip hook / LSP / plugin auto-discovery on spawn. KEPT OFF: on CLI
+#         2.1.167 `--bare` ALSO skips OAuth credential loading, so the call fails
+#         "Not logged in" (verified 2026-06-06). The plumbing stays so it can be
+#         re-enabled if a future CLI makes --bare auth-safe; do not set true on
+#         2.1.167.
+claude_cli_bare = false
+#   exclude_dynamic_system_prompt: KEPT OFF because it is a NO-OP on the brain
+#         path. CLI 2.1.167 help: this flag "only applies with the default system
+#         prompt (ignored ...)" — and the brain ALWAYS passes --system-prompt, so
+#         the CLI ignores it entirely. It does not error, but it trims nothing
+#         here. The plumbing is retained (harmless) for a future path that uses the
+#         default system prompt; the ONLY active latency lever is --effort.
+claude_cli_exclude_dynamic_system_prompt = false
+# Backoff base for timeout-path retries: sleep = (attempt+1) * base seconds.
+# 10 → ladder 10s/20s/30s. Was hardcoded 30 → 30s/60s/90s.
+# Lowering halves the brain-outage window after a single timeout.
+claude_cli_retry_timeout_backoff_base_seconds = 10
+# Phase 3 (Brain credentials) — pre-flight refresh margin in seconds.
+# Trigger an OAuth refresh if the access token expires within this window;
+# if the refresh fails AND we are inside the margin, raise
+# CredentialRefreshError instead of spawning a doomed subprocess.
+credential_refresh_margin_seconds = 600
+# Phase 3 (Brain credentials) — refresh attempt budget per call.
+# 3 attempts with exponential backoff (1s/3s/7s) before giving up.
+credential_refresh_max_attempts = 3
+# Cap on watchdog events injected into the Call A URGENT prompt.
+# Defence-in-depth — EventBuffer already truncates at 3000 chars.
+prompt_event_buffer_max_events = 20
+
+# Definitive-fix Phase 6 — cold-start completeness gate.
+[brain.cold_start_protection]
+enabled = true
+# Issue E12 (2026-05-27): relaxed from 0.85 to 0.70. E12 makes the validator
+# count failure-defaults, so honestly-scored degraded packages now lower the
+# cycle average; this gate must not block the whole new-trade batch on those
+# honest scores. The per-package floor + min_qualified_packages below still
+# enforce "at least one truly-warm package", so cache-warmup safety holds.
+# Reversible: restore 0.85. See memory/project_completeness_coldstart_interaction.md.
+min_avg_completeness = 0.70
+min_per_package_completeness = 0.75
+# Phase 7 of the 1D briefing rewrite — lowered from 3 to 1. The gate's
+# purpose is CACHE-WARMUP safety, not minimum-cohort enforcement. One
+# well-formed package proves caches are warm. The completeness floors
+# (min_avg_completeness, boot_grace_completeness) still detect
+# cache-degradation. See dev_notes/phase7_1d_briefing/decision_record.md.
+min_qualified_packages = 1
+boot_grace_period_sec = 600
+# Issue E12 (2026-05-27): relaxed from 0.95 to 0.80 for the same reason as
+# min_avg_completeness above — honest E12 scores must not block the batch
+# during boot grace. Reversible: restore 0.95.
+boot_grace_completeness = 0.80
+
+# Stage 2 (strategist -> Claude) prompt-richness knobs.
+# Scanner still emits up to 15 packages (see [scanner.briefing]);
+# Stage 2 keeps the top-N of those for the per-coin prompt block so
+# size stays bounded as the per-coin block grows under
+# enable_full_layer_block. Phased rollout: enable_* flags ship inert
+# (default false) and are flipped on together at the live trial.
+[stage2]
+# Operator preference (2026-05-05): top candidates feed the Stage 2
+# prompt; Claude selects 2-4 trades from those (see
+# TRADE_SYSTEM_PROMPT_ZERO_TWO range). Wider candidate set + higher
+# trade-count ceiling lets the system exploit more concurrent setups
+# without losing the strict-contract structure.
+# 2026-05-31: lowered 10 -> 5 to SHRINK the CALL_A prompt. The per-candidate
+# TRADE CANDIDATES blocks are ~69% of the user prompt (~2.4K chars each), so
+# capping the brain to the 5 best candidates cuts the prompt substantially and
+# eases brain first-token latency. Open positions are shown separately and do
+# NOT count against this cap. Raise back toward 10 if 5 setups is too few.
+# 2026-07-07 (win-rate enhancement Phase B): lowered 5 -> 3. Fewer, higher-
+# ranked candidates per CALL_A cuts trade frequency (structural fee drag was
+# 0.11%/round-trip across ~340 trades/day) and raises the average candidate
+# bar (top-3 by interestingness vs top-5). Also further shrinks the prompt.
+# Rollback: raise back to 5.
+top_n_to_brain = 3
+# Stage 2 phase 5 live trial (2026-05-05) — 3 flags flipped ON together.
+# Activates: rich Layer 1B/1C per-coin block (Phase 2),
+#            strict bounded-count trade contract (Phase 3 — currently
+#            2-4 range; setting name retained for backward-compat,
+#            see TRADE_SYSTEM_PROMPT_ZERO_TWO docstring),
+#            section-priority trim that protects essentials (Phase 4).
+# Rollback: set any/all back to false; restart trading-workers.
+# Flag-flip only — no code revert needed.
+enable_full_layer_block = true
+enable_zero_two_contract = true
+enable_priority_trim = true
+# Per-coin-authority Phase 6 (2026-05-29): cutover + ROLLBACK for removing the
+# global-regime DIRECTION lead from the brain prompt. true = per-coin is the
+# direction policy (no global "use as default bias" mandate; each coin trades
+# its OWN regime; only the breadth SIZING brake survives market-wide). Flip to
+# false to instantly restore the old global short/long-bias NOTE if a trial
+# shows the long side bleeding once the global short-bias is removed.
+per_coin_direction_enabled = true
+# Sniper-Latency-Size Fix Phase 2 (2026-05-07) — gated rollout of
+# per-coin verbosity compression in the full-layer formatter. Tighter
+# separators (single space instead of ", ") on the Components and
+# Active categories lines, plus one-decimal-lower precision on the
+# per-coin Components numeric fields. Identity-preserving (no field
+# removed; no abbreviation key needed) so flipping False -> True is
+# reversible. Realistic saving on a 10-coin top-N CALL_A is ~150-300
+# chars (~1-2 % of a 15K prompt). The compression rides on top of
+# enable_full_layer_block — when the full-layer formatter is dormant
+# the flag has no effect. The bigger architectural win (Anthropic
+# prompt caching) is documented as deferred in
+# dev_notes/sniper_latency_size_fix/phase2d_caching_finding.md.
+enable_prompt_compression = false
+# Candidate-Block Data Integrity Fix — Issue 3 (2026-06-09) — decimal places for
+# the per-coin "Components:" line. Default 4 (was a hardcoded 3, which rounded a
+# real funding rate like -0.0002 to -0.000). Matches the "Funding:" line so a
+# genuine small value is visible rather than looking dead.
+component_precision_decimals = 4
+
+[risk]
+# ===================== RISK MANAGEMENT — AGGRESSIVE (PAPER ONLY) =====================
+max_leverage = 5
+mandatory_stop_loss = true
+default_stop_loss_pct = 3.0
+default_take_profit_pct = 6.0
+# F37 (2026-06-05) — downstream minimum stop-loss distance (percent of entry).
+# SLTPValidator.validate_sl clamps any brain-proposed stop closer than this (or
+# at/through entry) out to this distance before execution. Matches the CALL_A
+# prompt rule "SL at least 1.5% from entry". Safety net on the ENTRY stop only;
+# the exit systems (trailing/ladder/chandelier) are untouched.
+min_sl_distance_pct = 1.5
+max_position_size_pct = 20.0
+max_open_positions = 10
+daily_loss_limit_pct = 10.0
+max_total_exposure_pct = 80.0
+max_drawdown_pct = 25.0
+min_order_value_usdt = 5.0
+loss_cooldown_seconds = 30
+# Maker-entry experiment (win-rate enhancement Phase D, 2026-07-07).
+# "market" (current default) = taker entry as today. "limit" = passive GTC
+# limit at current price (offset entry_limit_offset_bps toward the passive
+# side), waited up to entry_limit_timeout_seconds then CANCELLED + SKIPPED
+# if unfilled (no chase). Cuts entry fee 0.055% taker -> ~0.02% maker
+# (round trip 0.11% -> ~0.075%, meaningful vs the +/-0.40% avg trade).
+# SHIPS INERT ("market"); flip to "limit" only AFTER the entry-quality
+# filters' effect is measured, so the two changes stay attributable.
+entry_order_type = "market"
+entry_limit_timeout_seconds = 20.0
+entry_limit_offset_bps = 0.0
+# Direction-flip threshold for the XRAY direction recheck in
+# strategy_worker._execute_claude_trade. ratio = rr_opposite / rr_chosen.
+# When ratio > threshold AND structural SL/TP for the opposite direction
+# is available, the trade flips to the better-R:R direction and re-runs
+# the X-RAY conflict check. Replaces the prior block-at-5x / reduce-at-3x
+# behavior (Phase 1 of dir-block-fix, 2026-05-05).
+xray_dir_flip_threshold_ratio = 3.0
+
+# X-RAY Direction-Flip Switch (IMPLEMENT_XRAY_FLIP_SWITCH, 2026-05-25).
+# Master on/off for X-RAY's ability to REVERSE trade direction in the
+# execution path (strategy_worker._execute_claude_trade). false = the
+# sanctioned brain-then-APEX direction executes, flip disabled (operator
+# default, set to begin measuring the flip-off effect); true = pre-switch
+# behavior (X-RAY may reverse direction on extreme structural-RR ratios).
+# Does NOT affect X-RAY scoring / grading / selection, the structural
+# blocks, or the high-conviction veto (xray_high_conviction_protection_
+# enabled). Boot sentinel XRAY_FLIP_SWITCH_SENTINEL reports the state.
+xray_dir_flip_enabled = false
+
+# P0-2 fix (2026-05-22) — high-conviction protection.
+# When the brain's directive is high-conviction (per-coin regime is
+# trending_up + Buy, or trending_down + Sell, AND structural_data
+# .trade_direction agrees), XRAY is allowed to VETO (skip the trade
+# with a single-reason DIRECTION_DECISION log) but is NEVER allowed
+# to silently reverse the direction. Default true. Set false to
+# revert to pre-P0-2 behavior (XRAY can flip any direction when
+# structural-rr ratio is extreme).
+xray_high_conviction_protection_enabled = true
+
+# X-RAY Trade-Suppression Switch (IMPLEMENT_XRAY_SUPPRESS_SWITCH, 2026-05-25).
+# Master on/off for X-RAY's ability to SUPPRESS (block/skip) a trade the brain
+# and APEX already decided, in strategy_worker._execute_claude_trade. false =
+# X-RAY blocks NOTHING — every would-be block (xray_skip, xray_conflict,
+# xray_veto_high_conviction, xray_dir_block, xray_dir_flip_blocked) is written
+# to the booklog as an XRAY_BOOKLOG line and the brain's direction executes
+# (operator default 2026-05-25; the trades X-RAY used to skip now run). true =
+# pre-switch behavior (X-RAY blocks). Does NOT affect X-RAY scoring / grading /
+# selection / structural analysis or its analysis logs — X-RAY keeps running
+# and journaling either way. Orthogonal to xray_dir_flip_enabled (which gates
+# REVERSAL). Boot sentinel XRAY_SUPPRESS_SWITCH_SENTINEL reports the state.
+xray_trade_suppression_enabled = false
+
+[risk.flip_tp]
+# Cap parameters for the XRAY-direction-flip TP derivation
+# (TP-Volume-Closure fix Phase 1B, 2026-05-07). Used by
+# `src/core/flip_tp_capper.py` to bound the structural TP that the flip
+# path attaches to a flipped trade. Without this cap, the structural
+# target can sit 15-20% from current price for thinly-supported coins
+# and the SL/TP validator (10% ceiling) rejects the trade entirely.
+#
+# Cap formula:
+#   if vol_profile available:
+#     vol_cap_pct = min(vol_profile.recommended_tp_pct *
+#                       structural_buffer_multiplier,
+#                       hard_ceiling_pct)
+#   else:
+#     vol_cap_pct = fallback_tp_distance_pct
+#   final_dist_pct = min(structural_dist_pct, vol_cap_pct)
+#
+# enabled: master switch; set false to revert to pre-fix behavior.
+# hard_ceiling_pct: absolute cap regardless of volatility class. 5% is
+#   the upper bound for 10-30 minute holds; anything higher belongs to
+#   swing-trading timeframes. The downstream validator's own ceiling is
+#   10%, so this is the tighter of the two safety nets.
+# fallback_tp_distance_pct: used when VolatilityProfiler returns no
+#   profile (e.g., new symbol, profiler degraded). Conservative 2%.
+# structural_buffer_multiplier: multiplied against vol_profile's
+#   recommended_tp_pct before the min(). Default 1.0 means strict cap
+#   (matches spec literally). Raise to 1.25 / 1.5 in trial to allow
+#   structural targets to extend modestly beyond vol-aware. The
+#   volatility profile already includes regime multipliers (1.3x for
+#   trending, 0.7x for ranging) so vol_aware is itself context-aware;
+#   this multiplier sits ON TOP of that.
+enabled = true
+hard_ceiling_pct = 5.0
+fallback_tp_distance_pct = 2.0
+structural_buffer_multiplier = 1.0
+
+# Fix 7 (volatility-scaled entry stop, 2026-06-10) — the constant ~1.5% minimum
+# stop sat INSIDE volatile coins' normal noise band (91% of closes were stop-hits
+# in the choppy losing window vs 44-72% in trend), so ordinary breathing ended
+# trades before their thesis could play out. When enabled, the entry stop is
+# WIDENED to the coin's volatility-recommended distance (the volatility profiler's
+# recommended_sl_pct, which already encodes class + regime — e.g. a high/extreme
+# coin gets 2.4-3.6%), floored at reference_stop_pct (quiet coins keep the 1.5%
+# minimum-distance; the stop is never tightened below it) and capped at
+# max_cap_pct. The wider stop is paired with a proportionally SMALLER position so
+# the dollar risk AT the stop stays within the same reference budget (the live
+# path sizes by margin x leverage, not by stop distance, so the haircut is
+# explicit and tighten-only). The sacred per-trade margin cap is untouched.
+# Shipped OFF 2026-06-10; ENABLED 2026-06-10 evening (Five-Fix Follow-Up
+# Fix 3) after the losing-window replay passed: 50 real stop-hit trades
+# replayed through the live helper (verify_fix3_losing_window_stop_replay.py),
+# 4 of 7 noise-deaths survive their first 30 minutes (57%, RUNE x3 + KAT),
+# zero dollar-budget violations. The Call-A prompt now shows each candidate a
+# "Vol stop floor" line mirroring this exact clamp. Set false for instant
+# rollback (also removes the prompt line).
+[risk.volatility_stop_scaling]
+enabled = true
+reference_stop_pct = 1.5
+max_cap_pct = 5.0
+use_profiler_recommended_sl = true
+recommended_sl_scalar = 1.0
+
+[alerts]
+# Enable Telegram alert notifications
+telegram_enabled = true
+# Alert levels to send: INFO, WARNING, CRITICAL
+alert_levels = ["WARNING", "CRITICAL"]
+# Send daily performance summary
+daily_summary = true
+# Daily summary time (UTC, HH:MM format)
+daily_summary_time = "00:00"
+# Rate limit alerts: max messages per minute
+max_alerts_per_minute = 10
+# Include trade entry/exit alerts
+trade_alerts = true
+# Include signal alerts
+signal_alerts = true
+# Include error alerts
+error_alerts = true
+
+[mcp]
+# MCP transport: "stdio" for Claude Code, "sse" for browser/claude.ai
+transport = "stdio"
+# SSE server host (only used when transport = "sse")
+sse_host = "0.0.0.0"
+# SSE server port
+sse_port = 8080
+# Authentication required for SSE transport
+sse_auth_required = true
+# Server name advertised via MCP
+server_name = "trading-intelligence"
+# Server version
+server_version = "0.1.0"
+
+[watchdog]
+# Position Watchdog: code rules every 10s (timer, trailing, hard stops, duplicates)
+# Claude reviews handled by LayerManager every 30s
+enabled = true
+# How often to check positions (seconds) — code rules
+check_interval_seconds = 10
+# Alert when position loses > X% from entry
+loss_warning_pct = 0.5
+# Alert when position drops > X% from its peak unrealized profit
+trailing_loss_pct = 0.3
+# Alert when price is within X% of the distance to stop-loss
+sl_proximity_pct = 30.0
+# Alert when price moves > X% against position in single check
+rapid_move_pct = 0.5
+# Trigger Claude Brain when position loses > X%
+brain_trigger_loss_pct = 0.8
+brain_cooldown_seconds = 60
+partial_close_pct = 50.0
+max_brain_calls_per_hour = 20
+# Layer 3: early-exit disabled (0% historical win rate, 24/24 losses).
+# SL handles exits cleanly. Set true to re-enable; monitoring log
+# 'EARLY_EXIT_DISABLED_WOULD_FIRE' shows what it would have done.
+early_exit_enabled = false
+# Phase 2 (P0-1 Ghost Positions): fast set-diff reconcile cadence —
+# independent of the 5-min thesis sweep. 0.0 disables (kill switch).
+fast_reconcile_seconds = 30.0
+# Post-Execution Closure Fix Phase 1B (2026-05-05) — strategic-action
+# minimum-hold guardrail. Refuses CALL_B close/take_profit actions on
+# positions younger than this threshold UNLESS the close reason matches
+# a substring in the allow-list below (case-insensitive). Hold/tighten
+# /set_exit are unaffected. Defense-in-depth against recency-bias
+# closure language sneaking back into the position-management prompt.
+strategic_action_min_hold_seconds = 300.0
+strategic_action_allowed_early_close_reasons = [
+    "stop loss hit", "sl hit",
+    "take profit hit", "tp hit",
+    "structure invalidated", "setup broken",
+    "regime change", "regime shift",
+    "manual operator close", "manual close",
+]
+
+# Issue 1 (2026-05-18 ship 2026-05-20) — brain-close multi-factor scoring.
+# The watchdog intercepts brain's `wd_claude_action` close votes and runs
+# a 7-factor composite score (PnL, time remaining, age, velocity, SL
+# consumption, XRAY agreement, reasoning quality) before executing.
+#
+# wd_brain_scoring_enabled (kill switch) — when False the entire scoring
+#   path is bypassed and brain's close fires immediately. Default True.
+# wd_brain_scoring_enforce — Phase 1 (False, log-only): scoring computes
+#   and emits WATCHDOG_CLOSE_SCORE_COMPUTED + WD_CLOSE_SCORE_LOG_ONLY but
+#   brain's close still fires. Phase 2 (True, enforce): composite < 0
+#   tightens SL 30% toward breakeven instead of closing; 0 <= composite
+#   < threshold holds the position; composite >= threshold executes.
+#   Operator flips to True after ~24-48h of log-only data review.
+# wd_brain_scoring_threshold — composite gate for "execute" in enforce
+#   mode. Default 6.0 matches the scoring module's DEFAULT_THRESHOLD
+#   and the IMPLEMENT_THREE_ISSUES_FIX.md worked examples.
+wd_brain_scoring_enabled = true
+wd_brain_scoring_enforce = true
+wd_brain_scoring_threshold = 6.0
+
+# P0-3 fix (2026-05-22) — hard_risk_floor SL consumption percent.
+# When the current SL consumption is at or above this value, the
+# brain's close vote force-closes regardless of the composite score.
+# Catches edge cases where the composite is below threshold but the
+# position is already burning through its risk budget. Default 85.0
+# (operator-approved at the P0-3 gate). Set to 100.0+ to disable.
+wd_hard_risk_floor_sl_pct = 85.0
+
+# Layer 4 Realignment Phase 3.2 (2026-05-06) — configurable thresholds
+# for the watchdog's system-initiated emergency-mode triggers. Pre-fix,
+# the watchdog hardcoded session_pnl < -5.0 and hard_stops_this_hour >= 3
+# in `_determine_mode`; both now configurable. The hard-stops threshold
+# is raised from 3 to 5 to absorb noisy hours where normal-loss trades
+# happen to cluster, reducing false-positive emergencies and giving the
+# regular loss-management paths (CALL_B, time-decay, sniper) more room
+# to act before the nuclear option triggers. The session_pnl threshold
+# stays at -5.0 (pre-fix value) — that one IS a genuine session
+# circuit-breaker.
+[watchdog.emergency]
+session_pnl_threshold_pct = -5.0          # session circuit-breaker (negative %)
+hard_stops_per_hour_threshold = 5         # raised from 3; reduces false-positive emergencies
+
+[mcp_pool]
+# Phase 23 (Y-22) — MCP client pool. Disabled by default; turn on per
+# consumer to migrate off the one-shot stdio storm. Each consumer that
+# imports MCP tools should:
+#   1. Set ``enabled = true`` here.
+#   2. Run ``python server.py --transport sse`` in the background
+#      (workers manager can host this — add to manager.py if needed).
+#   3. Acquire a client via ``MCPClientPool.acquire`` instead of
+#      shelling out to ``server.py`` per call.
+# When enabled=false, every consumer keeps using one-shot stdio.
+enabled = false
+sse_url = "http://127.0.0.1:8080"
+min_warm = 1
+max_warm = 2
+health_check_interval_seconds = 60
+acquire_timeout_seconds = 2.0
+
+[price]
+# Local-price freshness + divergence-observation tuning. After the
+# price-source-divergence fix (2026-05-03) the Transformer's enrichment
+# is observation-only — Shadow's authoritative mark_price and
+# unrealized_pnl_usd pass through to the dashboard unchanged. The
+# divergence math is still run because the strategist's
+# PROMPT_DEFERRED gate consumes ``_last_enrichment_max_divergence_pct``.
+#
+# - local_max_age_seconds: above this age the WebSocket-fed local price
+#   is treated as stale and the divergence calc is skipped for that
+#   position (PRICE_STALE WARNING logged). Set to a large number (e.g.
+#   999999) to disable the staleness gate.
+# - divergence_override_pct: above this absolute divergence
+#   (% of Shadow's price) the observation emits a PRICE_DIVERGENCE_OBS
+#   WARNING + MED-priority price_divergence_obs event-buffer entry so
+#   operators / Claude see the drift. The name is retained for backward
+#   compatibility with config.toml; semantics changed from
+#   "above-threshold = keep Shadow / below-threshold = override to
+#   local" (pre-fix) to "above-threshold = log + event-buffer /
+#   below-threshold = silent observation" (post-fix). No mutation
+#   happens in either branch. Set to a large number (e.g. 999) to
+#   silence observation logs without affecting the strategist gate.
+# - divergence_block_prompt_pct: any open position with divergence >
+#   this value blocks Claude's prompt build (PROMPT_DEFERRED). The
+#   strategist re-tries on the next cycle. This contract is preserved
+#   byte-for-byte by Phase 2 of the price-source-divergence fix.
+local_max_age_seconds = 10.0
+divergence_override_pct = 0.5
+divergence_block_prompt_pct = 1.0
+# Issue 2.10 (2026-06-07): reject an anomalous WS tick whose price jumps more
+# than this fraction (0.15 = 15%) from the last accepted price, so a bad print
+# cannot corrupt a PnL/stop decision. A sustained move (consecutive ticks at the
+# new level) is accepted as the new baseline, so genuine fast moves are not
+# stuck-rejected. Set to 0 to disable. Observability: PRICE_SPIKE_REJECT.
+spike_reject_pct = 0.15
+
+[sl_gateway]
+# Single-entry-point stop-loss gateway (Layer 3 hardening).
+# When enabled, every SL modification (Time-Decay, SENTINEL, Profit Sniper
+# trail, watchdog trail, brain tighten) routes through one validator that
+# enforces tighten-only + min-distance + max-step + rate-limit.
+#
+# Rollout protocol:
+#   1. Start with enabled=false (symmetric pass-through, state tracked).
+#   2. Verify SL_GATEWAY_PASSTHROUGH count equals SL_PROPAGATED count.
+#   3. Flip enabled=true with log_only_global=true to observe rejects.
+#   4. Flip log_only flags to false one at a time for staged enforcement.
+# Dry-run enabled by the Prefetch-Performance Fix (2026-04-23): every rule
+# is now evaluated but REJECTs are downgraded to SL_GATEWAY_REJECT_WOULD
+# logs. No trades are blocked. Once SL_GATEWAY_STATS by_rsn distribution is
+# validated over a session, set log_only_global=false for hard enforcement.
+enabled = true
+# Rule R2: minimum distance between new SL and current price (percent).
+# Legacy static fallback; when the volatility profiler is wired (default
+# since manager.py), R2 uses an ATR-scaled effective min — see the
+# min_distance_atr_multiplier / _abs_floor_pct keys below.
+min_distance_pct = 0.3
+# Rule R3: maximum step size per single SL update (percent of previous SL).
+# Phase 2 of dir-block-fix (2026-05-05): lowered 0.5 → 0.25 so each
+# SL tighten only moves a quarter of the remaining distance, letting
+# profits run instead of locking in tight gains and giving back peaks.
+# Pre-fix BSBUSDT 2026-05-05 18:02:04 single 4.519 % activation step
+# illustrated the prior cap was both too generous and not enforced.
+max_step_pct = 0.25
+# Rule R4: minimum seconds between SL updates per symbol.
+rate_limit_seconds = 30
+# Fast-move placeability A/B lever (default off/inert; 30 == rate_limit_seconds).
+# The profit-lock lane may re-tighten faster than rate_limit_seconds so a
+# sustained big-mover peak is tracked at finer cadence. Clamped to <= the base
+# window; tighten-only + fresh-mark degrade + wrong-side guard unchanged, so a
+# faster cadence only ratchets the stop up toward a placeable value. Set lower
+# (e.g. 10) to A/B against placement_forensic.log. Do not go below the 5s tick.
+profit_lock_rate_limit_seconds = 30
+# Global log-only: every rule becomes a SL_GATEWAY_REJECT_WOULD log.
+# Phase 2 of dir-block-fix (2026-05-05) — Discovery 1: advance from
+# step 3 → step 4 of the rollout protocol. Pre-fix runtime was in pure
+# audit mode, so all R2/R3/R4 violations logged REJECT_WOULD without
+# enforcement, allowing the 4.519 % BSBUSDT activation step through.
+# Per-rule log_only flags below remain false so all four rules now
+# enforce hard.
+log_only_global = false
+# Per-rule log-only flags (surgical rollout controls).
+# Tighten-only MUST stay false — it is safety-critical.
+log_only_tighten_only = false
+log_only_min_distance = false
+log_only_max_step = false
+log_only_rate_limit = false
+
+# ATR-scaled R2 min_distance (user spec: max(0.05%, atr_5m_pct * 0.5)).
+# Aggressive to maximise accepted trail pushes on low-vol coins. The
+# absolute floor prevents bid-ask strangulation. Class ceiling clamps
+# freak spikes. See src/analysis/vol_scale.py.
+min_distance_atr_multiplier = 0.5
+min_distance_abs_floor_pct = 0.05
+
+# PF/LC Top-15 Problem 1.1 — give R2 the breakeven carve-out R3 already has.
+# When the ladder's armed breakeven floor is being placed, R2 clamps the stop
+# toward price but never below breakeven (the entry price), so on a high-vol
+# coin the floor holds AT breakeven (worst case a zero-loss exit) instead of
+# being rewritten below it. Set false to revert to the unconditional R2 clamp.
+r2_breakeven_floor_enabled = true
+
+# Dynamic Adaptive Exit (2026-06-15) — R2 profit-lock-floor exemption. When
+# true, an armed R-derived, fee-floored profit lock from a trusted profit
+# source (ladder/trail/lock) is HELD at its value inside the min-distance
+# instead of being dropped as a clamp-noop (the proven 99.6%-of-rejects
+# failure). Holds the lock, not just breakeven, so it improves on the current
+# stop and writes. Tighten-only, wrong-side, max-step, rate-limit, and the
+# catastrophic cap are never weakened. Off by default; enabled with the
+# rescaling (Commit 2) after replay verification.
+r2_profit_lock_floor_enabled = true
+
+# Dynamic Adaptive Exit FIX (2026-06-15) — fresh-mark placeability degrade. The
+# R2 placeability math judges against the caller's current_price snapshot, which
+# the ~150 ms wire latency can stale; on a fast retrace a value placeable against
+# the snapshot is wrong-side of the live mark, the exchange blocks it, and NOTHING
+# is placed (the green trade rides its old wide stop back to a loss — confirmed
+# live on PYTHUSDT/MONUSDT/EGLDUSDT). When true, the gateway re-validates a
+# near-the-money final stop against the freshest mark (the same field the adapter
+# enforces) and DEGRADES it to the closest placeable stop — floored at breakeven
+# for a trusted source — instead of emitting the unplaceable value. Tighten-only
+# re-checked; never loosens; no-ops (keeps the existing stop) when even the fresh
+# boundary cannot improve. log_only variant observes the would-degrade only.
+r2_fresh_mark_degrade_enabled = true
+log_only_fresh_mark_degrade = false
+# The fresh-mark recheck only fires for near-the-money stops; a stop farther than
+# this multiple of the effective min-distance cannot realistically flip wrong-side
+# in the ~150 ms wire latency, so the recheck (and its extra get_position call) is
+# skipped — real winners and far loss stops never pay the cost.
+fresh_mark_recheck_distance_mult = 2.0
+
+# ── Phase 1: trade-state owner switch (exit-authority consolidation) ──
+# Gives the stop one owner at a time, decided by the trade's state. The gateway
+# classifies every writer into a bucket and, given the trade's green/red state,
+# admits only the rightful owner plus the Head (the catastrophic cap); the
+# sniper spine filters its loss candidates off green trades to match.
+#
+# Rollout (mirrors the gateway's own enabled/log_only protocol above):
+#   1. owner_switch_enabled=true, owner_switch_enforce=false — LOG-ONLY. The
+#      gate computes state/owner and logs SL_GATEWAY_OWNER_HANDOFF and
+#      SL_GATEWAY_WRONG_OWNER_WOULD but blocks nothing and changes no behavior.
+#      Verify the hand-offs occur at breakeven on live trades.
+#   2. owner_switch_enforce=true — ENFORCE. Non-owner engine writes are deferred
+#      and the spine filters loss candidates off green trades (Layer B).
+#   3. advisory_enforce=true — Phase 5: advisory writers (brain/sentinel/
+#      watchdog-scoring/watchdog-trails) are deferred too.
+# The gate fails OPEN on any internal error (admits the write) so it can never
+# block a protective stop. R1 tighten-only is always enforced beneath it.
+owner_switch_enabled = true
+owner_switch_enforce = true
+advisory_enforce = false
+# Faded-winner hand-off (decided at the Phase-1 gate). false = a once-green
+# ('graduated', peak >= ladder arm) trade that craters stays green-owned (the
+# gateway keeps the profit engine in charge); today's behavior. Note: on such a
+# graduated trade the sniper's loss block is gated by the graduation latch, so
+# the per-trade CAP SL does NOT regenerate — the live catastrophe protection is
+# the always-on volatility-spike force-close plus the resting exchange stop, not
+# a fresh loss_cap write. true = re-arm the loss engine when the faded winner
+# crosses below breakeven (Rule 5). MUST be flipped together with [loss_cutting]
+# graduation_crater_rearm_enabled so the red owner actually has its tools;
+# otherwise the boot sentinel SL_GATEWAY_OWNER_SWITCH_INCONSISTENT fires and the
+# red owner would own the stop with nothing to write.
+faded_winner_rearm_red = false
+# Hysteresis band around entry. State flips to green at >= +deadband and to red
+# at <= -deadband; inside the band the last owner is held (a brand-new position
+# defaults to the red owner so the opening floor is the baseline).
+breakeven_deadband_pct = 0.05
+# Phase 2 — the Head as sole override (Option A, profit-priority). When true, a
+# running GREEN trade is touched only by the Head (the catastrophic cap) or its
+# own green owner; the loss engine and the advisory systems are deferred on a
+# green trade so a winner can run. The Head only ever tightens (R1 guarantees
+# it never loosens). The Head's force-close twins (loss_spike_force,
+# loss_cap_force) close the position directly and are always-on, outside this
+# gate.
+head_only_seizes_green = true
+# Bucket memberships (centralized, Rule 9). HEAD = always-allowed catastrophic
+# cap. ALWAYS = opening stop + naked-position safety sweeper (never blocked).
+# Reserved/not-yet-emitted sources are kept so a future writer is classified the
+# moment it ships: "profit_sniper_breakeven" and "micro_floor" (green) and
+# "sentinel_breakeven" (advisory) are not produced as gateway write sources
+# today (micro_floor's writes go through profit_sniper_ladder); classifying them
+# is a harmless no-op, not an active writer.
+head_sources = ["loss_cap", "loss_cap_emergency"]
+green_sources = ["profit_sniper_ladder", "profit_sniper_trail", "profit_sniper_lock", "profit_sniper_breakeven", "micro_floor"]
+red_sources = ["time_decay", "loss_structure", "loss_recovery"]
+advisory_sources = ["brain_tighten", "watchdog_tighten", "wd_brain_scoring", "sentinel_advisor", "sentinel_deadline", "sentinel_breakeven", "watchdog_lock_peak", "watchdog_breakeven", "trail_activation", "trail_update"]
+always_allowed_sources = ["loss_atr_initial", "safety_sweeper"]
+
+# Per-class ceiling for the ATR-scaled min_distance. Anything above these
+# values would be an SL that's pathologically far from price (e.g. flash
+# crash). Dead coins cap at 0.30% (their baseline noise); extreme coins
+# can go up to 3.50% during real volatility.
+[sl_gateway.min_distance_class_ceiling]
+dead = 0.30
+low = 0.50
+medium = 1.00
+high = 2.00
+extreme = 3.50
+
+# =============================================================================
+# Scanner — Layer 1D selector + briefing builder
+# =============================================================================
+# Phase 5 of the 1D briefing rewrite introduces a mode flag that
+# switches between the legacy 5-criterion exclusion gate (production
+# default; preserved verbatim for instant rollback) and the new
+# briefing-mode pipeline (characterize -> label -> rank -> top-N).
+# Phase 9 flips the default to "briefing" after the Phase 8 A/B
+# harness confirms behavior is healthy.
+[scanner]
+# Phase 9 cutover (2026-05-01): flipped default to "briefing". Set back
+# to "exclusion" to roll back to the legacy 5-criterion gate instantly.
+mode = "briefing"
+# Phase 8 of the 1D briefing rewrite — A/B comparison harness.
+# "off"         = mode flag governs every cycle.
+# "alternating" = even-indexed cycle uses exclusion, odd-indexed uses
+#                 briefing. Operator runs for 24-48h to compare per-mode
+#                 metrics (package count, trade count, P&L). Result drives
+#                 Phase 9 cutover decision. Restored to "off" at Phase 9.
+ab_mode = "off"
+
+# Market scanner — AGGRESSIVE TESTNET MODE
+enabled = true
+scan_interval_seconds = 300
+min_volume_24h = 5000000
+max_coins = 30
+max_spread_pct = 0.15
+# Phase 5 (Universe flapping fix) — re-entry cooldown bumped from the
+# legacy hardcoded 300 s. A coin removed from the active universe
+# cannot re-enter for this many seconds (force-included coins bypass).
+reentry_cooldown_seconds = 600
+
+# Phase 5 (Universe flapping fix) — consecutive-scan hysteresis on the
+# active_universe membership decision. Without it, a coin oscillating
+# around the cutoff score enters/exits every scan, triggering
+# KLINE_BACKFILL → cold start → STRAT_SKIP_STALE storms (live obs:
+# 14 rotations/hour on 2026-04-26).
+[scanner.hysteresis]
+enabled = true
+entry_consecutive_scans = 2
+exit_consecutive_scans = 3
+entry_threshold_above_min = 5
+exit_threshold_below_min = -5
+
+# ─────────────────────────────────────────────────────────────────────
+# Composite opportunity scoring (Phase 6 — corrected Layer 1).
+#
+# ScannerWorker reads warm caches from the 7 data workers and computes
+# a per-coin opportunity score as a weighted sum of these 5 components.
+# Tunable: re-balance based on observed trade outcomes.
+#
+# Reference: LAYER1_CORRECTED_ARCHITECTURE_BLUEPRINT.md §9.3.
+# ─────────────────────────────────────────────────────────────────────
+# Definitive-fix Phase 4 (2026-04-28): added ``rr`` weight so RR is both
+# a (relaxed) gate AND a ranking signal. Coins with marginal RR (just
+# above ``min_rr_ratio``) still qualify but rank below coins with strong
+# RR. Sum stays 1.0; old weights reduced proportionally to make room.
+[scanner.scoring_weights]
+structure = 0.27   # X-RAY setup score (0-100, normalized)
+strategy = 0.27    # StrategyWorker L2 total_score (normalized to 0-1)
+signal = 0.13      # SignalWorker confidence (0-1)
+regime = 0.13      # Regime alignment factor (-1..+1)
+funding = 0.10     # Funding rate strength (|rate| > 0.01% counts)
+rr = 0.10          # Direction-aware RR (rr_long for long, rr_short for short), normalized at RR=3.0
+
+# Layer 1 restructure Phase 5 — qualitative checklist applied BEFORE
+# the quantitative ranking step. All five criteria must pass for a
+# coin to be considered for selection (force-included open-position
+# coins skip this gate per HR-2). See ScannerQualitativeSettings.
+#
+# Definitive-fix Phase 4 (2026-04-28): min_rr_ratio 2.0 → 1.3. Forensic
+# E.1.6 showed surviving setups had RR in 0.7-1.7 range — 2.0 was the
+# terminal gate killing every candidate. 1.3 means winners must be 30%
+# larger than losers; combined with >50% win rate and now-active RR
+# composite weight, marginal-RR coins survive but only rank highly when
+# their RR is genuinely strong.
+[scanner.qualitative]
+# Tuned 2026-04-29 (live observation): 1.3 was the dominant cut — 14 of
+# 16 consensus-passers failed RR per cycle, leaving qualified=2-3 vs
+# blueprint §10.2 target band of 5-25. Lowered to 1.1 to lift qualified
+# count toward target, without crossing the 1.0 breakeven floor (1:1
+# reward-to-risk). Quality preserved: still requires reward strictly
+# greater than risk on the consensus direction; only setups with
+# negative expectancy get rejected.
+min_rr_ratio = 1.1
+min_consensus = "GOOD"            # STRONG | GOOD; LEAN/WEAK/CONFLICT always fail
+require_regime_alignment = true
+funding_blocker_threshold_pct = 0.001  # 0.1% — funding above this against direction blocks
+recent_failure_blocker_hours = 1
+max_selection = 15
+min_selection = 0                  # output empty when nothing qualifies
+
+# =============================================================================
+# 1D briefing-pack rewrite (Phase 4) — interestingness ranker config
+# =============================================================================
+# The briefing pipeline (state_labeler → interestingness ranker →
+# briefing_builder) replaces the 5-criterion exclusion gate above with
+# a graded preference: every coin gets a continuous score and the
+# top-N go into the brain prompt. Phase 5 introduces the mode flag
+# that flips Layer 1D from exclusion-mode to briefing-mode; this
+# section's settings are read today only by the per-package score
+# computation inside _build_package (additive — no behavior change).
+[scanner.briefing]
+top_n_packages = 15            # max coins per cycle (forced positions on top)
+min_briefing_packages = 12     # soft floor — pad to this many briefings
+qualified_threshold = 0.30     # interestingness floor for "qualified" flag
+prompt_floor_interestingness = 0.20  # below this AND no labels → skip block
+
+# Component weights for the interestingness formula. Must sum to 1.0
+# (validated in __post_init__). Calibration: typical mid-cap with one
+# label scores ~0.45; clean trend with sweep label ~0.81; weak unlabeled
+# ~0.13. Top-15 cut lands around interestingness >= 0.45 in current
+# market.
+[scanner.briefing.interestingness_weights]
+cleanness = 0.20            # regime conf + setup conf + direction agreement
+confluence = 0.20           # how many directional anchors point same way
+extremity = 0.15            # max(funding, F&G, range pos, OI delta, vol surge)
+label_strength = 0.20       # primary label base weight + decayed secondaries
+structural_quality = 0.15   # 0.45·setup_norm + 0.35·rr_norm + 0.20·mtf_score
+mtf_alignment = 0.07        # MTF aligned_count / 4
+open_position_floor = 0.03  # +0.03 absolute bump for held positions
+
+# =============================================================================
+# Scanner state-labeller — Issue 3 of 2026-05-19 direction-bias fix Phase B
+# =============================================================================
+# The 8 per-trigger regime hard-kill predicates in
+# src/workers/scanner/state_labeler.py (lines 253, 268, 283, 301, 356, 371,
+# 477, 491) historically returned None when the current market regime did
+# not match the trigger's expected regime. After the Issue 3 fix the
+# predicates compute base confidence and multiply by counter_regime_-
+# confidence_haircut when the regime mismatches.
+#
+# 0.0 → reproduces the legacy hard-kill (label suppressed entirely).
+# 0.5 → default; labels fire at half their normal confidence in mismatched
+#       regime, allowing the brain to see counter-regime opportunities at
+#       reduced conviction while preserving directional discipline.
+# 1.0 → removes the regime gate entirely; labels fire at full confidence
+#       regardless of regime.
+#
+# Reversible by editing this value and restarting workers. Operator may
+# step from 0.5 → 0.3 (more conservative) or 0.5 → 0.7 (more permissive)
+# based on Phase B trial outcome.
+[scanner.labeller]
+counter_regime_confidence_haircut = 0.5
+# Phase 1 calibration (2026-06-08) — make the extreme-sentiment contrarian
+# label per-coin instead of a uniform F&G-only confidence. Scale its
+# confidence by the coin's own structural conviction (floored below so a
+# structure-blind coin keeps a small score and loses primary to a real
+# structural label), and haircut it in off-trend / dead / balanced regimes.
+# Set conviction_floor = 1.0 and offtrend_haircut = false to revert.
+extreme_sentiment_conviction_floor = 0.35
+extreme_sentiment_offtrend_haircut = true
+# Four-Element Prompt Recalibration, Element 3 (2026-06-11) — when true, the
+# labeller receives the structure engine's pre-clamp range truth and the
+# range-fade / funding-fade labels cannot fire against a genuine break:
+# RANGE_FADE_LONG never fires on a price BELOW the range (a breakdown is not a
+# floor — June-11 DYDX wore that label through a 24-submission breakdown),
+# mirrored for shorts above the range. In-range labelling is byte-identical
+# either way. Set false to restore the legacy labels without touching the
+# prompt markers.
+range_fade_breakout_guard_enabled = true
+
+# =============================================================================
+# Universe — Layer 1 alignment (single source of truth for "what coins?")
+# =============================================================================
+# Operator-curated 50-coin watch list. The single source of truth for
+# Layer 1: Shadow subscribes to these, ScannerWorker filters from these,
+# all downstream workers operate on the 30-coin active subset selected
+# from these every 5 minutes. Open-position coins are always
+# force-included even if outside this list (HR-2 in the blueprint).
+#
+# Manual review recommended weekly. See WATCH_LIST_50.md for the full
+# selection rationale (3-tier composition: 12 majors + 23 mid-caps +
+# 15 aggressive opportunity hunters, calibrated for ~$100 capital with
+# $0.50+/hour profit goal).
+#
+# Validation rules (enforced by UniverseSettings.__post_init__):
+#   - non-empty, length ≥ 10
+#   - every entry matches ^[A-Z0-9]+USDT$ (uppercase, USDT-quoted)
+#   - no duplicates
+#
+# 2026-04-26 substitution per WATCH_LIST_50.md alternates protocol:
+#   FETUSDT → AEROUSDT (FETUSDT is status=Closed on Bybit; AEROUSDT
+#   is the top Tier B alternate listed in WATCH_LIST_50.md)
+
+[universe]
+watch_list = [
+  # Tier A — Always-On Majors (12) — safety net + tight-spread scalping
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "AVAXUSDT",
+  "LINKUSDT",
+  "ARBUSDT",
+  "NEARUSDT",
+  "ATOMUSDT",
+  # Tier B — Volatile Mid-Caps (23) — main hunting ground for daily exploitation
+  "INJUSDT",
+  "RENDERUSDT",
+  "ONDOUSDT",
+  "ENAUSDT",
+  "PYTHUSDT",
+  "SEIUSDT",
+  "AEROUSDT",  # substituted for delisted FETUSDT (top Tier B alternate)
+  "RUNEUSDT",
+  "GALAUSDT",
+  "MANAUSDT",
+  "SANDUSDT",
+  "AXSUSDT",
+  "LDOUSDT",
+  "CRVUSDT",
+  "DYDXUSDT",
+  "AAVEUSDT",
+  "ICPUSDT",
+  "IMXUSDT",
+  "HBARUSDT",
+  "HYPEUSDT",
+  "GMTUSDT",
+  "FILUSDT",
+  "MNTUSDT",
+  # Tier C — Aggressive Opportunity Hunters (15) — high-leverage opportunity strikes
+  "MONUSDT",
+  "SKRUSDT",
+  "PLUMEUSDT",
+  "EGLDUSDT",
+  "ALGOUSDT",
+  "BSBUSDT",
+  "KATUSDT",
+  "HYPERUSDT",
+  "ORCAUSDT",
+  "BLURUSDT",
+  "OPUSDT",
+  "APTUSDT",
+  "LTCUSDT",
+  "BCHUSDT",
+  "ALICEUSDT",
+]
+
+# Dynamic daily universe-refresh feature (rebuilds the watch_list above
+# around coins that are actually moving, twice a day and on a manual
+# Telegram press, on MULTI-DAY activity). Disabled by default; the
+# operator enables it at the Phase 5 decision gate. Every tunable lives
+# here so nothing is hardcoded. Selection is a two-pass hybrid: one bulk
+# 24h ticker call liquidity-floors and coarse-ranks all coins, then
+# multi-day daily candles and open interest are fetched only for the top
+# shortlist_size survivors and scored. stable_core_size stays 0 (full
+# rebuild). Phase 5 decision (2026-06-16): FULL REBUILD (stable_core_size = 0)
+# — majors are included only when they themselves move; open positions are
+# always force-kept and the liquidity floor keeps every pick executable, so a
+# separate stable core was judged redundant. Feature ENABLED by the operator
+# at the Phase 5 gate; takes effect on the next workers restart.
+[universe.refresh]
+enabled = true
+schedule_hours_utc = [23, 11]
+warmup_max_minutes = 60
+warmup_poll_seconds = 60
+target_universe_size = 50
+shortlist_size = 120
+stable_core_size = 0
+liquidity_floor_usd = 5000000.0
+max_spread_pct = 0.15
+min_price = 0.0001
+volatility_lookback_days = 7
+volatility_weight = 0.60
+volume_surge_weight = 0.25
+oi_weight = 0.15
+oi_enabled = true
+# Whipsaw directionality is the bar for "tradeable". The universe fills
+# with coins at or above the strict floor, up to target_universe_size, and
+# is allowed to run SHORT down to min_universe_size rather than admit
+# choppy coins. Only when fewer than min_universe_size coins clear the
+# strict floor (a trendless market) is it softened to
+# softened_min_directionality, just enough to reach the minimum, and that
+# day is flagged UNIVERSE_SOFTENED. Softening is never the default.
+whipsaw_min_directionality = 0.20
+min_universe_size = 24
+softened_min_directionality = 0.12
+# Quality guards: reject thin parabolic pumps above this average daily
+# range (0 disables), and never select these instruments (tokenised
+# commodities / index products are not crypto movers).
+volatility_ceiling_pct = 60.0
+# Never selected: tokenised commodities, index products, and tokenised US
+# equities/ETFs (not crypto movers). No clean metadata flag distinguishes
+# these from crypto on Bybit, so this denylist needs occasional upkeep as
+# new stock tokens list; the refresh logs the selected 50 so leakers show.
+exclude_symbols = [
+  "XAUUSDT", "XAGUSDT", "XAUTUSDT", "PAXGUSDT", "SPXUSDT",
+  "SOXLUSDT", "INTCUSDT", "EWYUSDT", "MRVLUSDT", "MUUSDT", "SNDKUSDT",
+]
+volatility_saturation_pct = 8.0
+volume_surge_saturation = 3.0
+oi_expansion_saturation_pct = 30.0
+
+# Per-coin name aliases for news/sentiment symbol extraction.
+#
+# Tickers (e.g. "btc" from BTCUSDT) are auto-derived in
+# UniverseSettings.__post_init__ via extract_base_asset() — do NOT re-list
+# them here. Add an entry only for full-name spellings (or alternate
+# tickers) that appear in news headlines / Reddit titles. Aliases are
+# matched case-insensitively as substrings (or word-boundary regex when
+# the alias is <= 4 chars). Each alias must map to a single watch_list
+# symbol; collisions raise ConfigError at startup.
+[universe.coin_aliases]
+BTCUSDT   = ["bitcoin"]
+ETHUSDT   = ["ethereum", "ether"]
+SOLUSDT   = ["solana"]
+XRPUSDT   = ["ripple"]
+BNBUSDT   = ["binance coin", "binance"]
+ADAUSDT   = ["cardano"]
+DOGEUSDT  = ["dogecoin"]
+AVAXUSDT  = ["avalanche"]
+LINKUSDT  = ["chainlink"]
+ARBUSDT   = ["arbitrum"]
+NEARUSDT  = ["near protocol"]
+ATOMUSDT  = ["cosmos"]
+INJUSDT   = ["injective"]
+RENDERUSDT = ["render network"]
+ONDOUSDT  = ["ondo finance"]
+ENAUSDT   = ["ethena"]
+PYTHUSDT  = ["pyth network"]
+SEIUSDT   = ["sei network"]
+AEROUSDT  = ["aerodrome"]
+RUNEUSDT  = ["thorchain"]
+GALAUSDT  = ["gala games"]
+MANAUSDT  = ["decentraland"]
+SANDUSDT  = ["the sandbox", "sandbox"]
+AXSUSDT   = ["axie infinity"]
+LDOUSDT   = ["lido", "lido dao"]
+CRVUSDT   = ["curve dao", "curve finance"]
+DYDXUSDT  = ["dydx"]
+AAVEUSDT  = ["aave"]
+ICPUSDT   = ["internet computer"]
+IMXUSDT   = ["immutable", "immutable x"]
+HBARUSDT  = ["hedera"]
+HYPEUSDT  = ["hyperliquid"]
+GMTUSDT   = ["stepn"]
+FILUSDT   = ["filecoin"]
+MNTUSDT   = ["mantle"]
+MONUSDT   = ["monero"]
+SKRUSDT   = ["sekuritance"]
+PLUMEUSDT = ["plume network"]
+EGLDUSDT  = ["multiversx", "elrond"]
+ALGOUSDT  = ["algorand"]
+BLURUSDT  = ["blur"]
+OPUSDT    = ["optimism"]
+APTUSDT   = ["aptos"]
+LTCUSDT   = ["litecoin"]
+BCHUSDT   = ["bitcoin cash"]
+ALICEUSDT = ["my neighbor alice"]
+
+[regime]
+# Market regime detector
+#
+# Branch thresholds calibrated to close the ELSE = RANGING fallback gap.
+# Pre-tune the explicit branches absorbed under 10% of emissions; 73.9%
+# fell through `else: RANGING conf=0.40` (regime.py:153-156) producing an
+# uninformative default label with 12.5% accuracy. Empirical 30-min
+# kline analysis on 96 stratified samples documented in
+# dev_notes/regime_investigation/q2_synthesis.md.
+#
+# trending_adx_threshold lowered to 20 — catches the [20, 25) transition
+# band where ADX shows nascent directional pressure. With DIs aligned and
+# choppiness < 45 the coin is meaningfully trending despite ADX below the
+# old strict 25 cut.
+# ranging_choppiness_threshold lowered to 50 — strict ranging at chop > 60
+# almost never fired in crypto (3.1% of ranging emissions). 50 matches
+# crypto-norm flat-market signature.
+# volatile_atr_percentile = 70 — Issue #9 fix (2026-05-27) made atr_percentile a
+# TRUE rolling percentile (rank of the current NATR vs the fetched 200 H1
+# window, bounded 0-100), so 70 now means "above the 70th percentile of recent
+# volatility". Previously it was `atr_percentile = natr * 100`, a fixed absolute
+# level (live max reached ~641) — no longer the case. See src/strategies/regime.py.
+# dead_adx_threshold lowered to 12 — tighter dead criteria so weakly-
+# trending dead-volume coins fall to trending branches, not dead.
+detection_interval_seconds = 600
+primary_symbol = "BTCUSDT"
+trending_adx_threshold = 20
+ranging_adx_threshold = 20
+ranging_choppiness_threshold = 50
+# Issue #6 tiling fix (2026-05-27): explicit ceiling for a CLEAN trend.
+# Coins with ADX trend strength but choppiness at/above this are no longer
+# dumped into a fabricated RANGING/0.40 dead-zone; they are classified by
+# their dominant metric with a computed confidence (see src/strategies/regime.py).
+trending_choppiness_max = 45
+volatile_atr_percentile = 70
+# Per-coin-authority Phase 0a (2026-05-29): VOLATILE volume trigger, was the
+# hardcoded literal 2.0 in regime.py. Now evaluated AFTER trend/range/dead
+# structure, so a low-ADX high-choppiness coin is RANGING (not VOLATILE) even
+# if its volume spikes; this only catches genuinely volume-driven volatility.
+volatile_volume_ratio = 2.0
+dead_adx_threshold = 12
+dead_volume_ratio = 0.5
+# Phase 3 (output-quality): per-symbol confirm-N-readings hysteresis.
+# Pre-fix this was hardcoded at 2 in src/strategies/regime.py:185.
+# Higher → more sticky regimes (fewer false flips), lower → more
+# responsive (potentially flapping). Validated >= 1 at config-load.
+hysteresis_count = 2
+# Per-coin-authority Phase 5 (2026-05-29): breadth RISK/SIZING brake — the ONLY
+# market-wide signal that survives the global-regime removal. Derived from the
+# PER-COIN regime distribution (not a single coin); shrinks position size when
+# the universe is directionally lopsided (high correlation -> systemic risk).
+# SIZING ONLY — never direction, never strategy roster. Set breadth_brake_enabled
+# = false to roll back to no brake. Graduated: mult = 1.0 while the dominant
+# trending-direction share <= start, then linearly down to floor at full
+# one-sidedness. Conservative defaults.
+breadth_brake_enabled = true
+# Issue 2.4 (2026-06-07): the throttle fired but barely bit (mult ~0.96, a 4%
+# cut, at 0.68 lopsided) because start was high and floor shallow. Calibrated to
+# genuinely reduce size as breadth becomes one-sided: engage at 0.60 (was 0.65)
+# and cut to 0.40 at full one-sidedness (was 0.50). At 0.68 lopsided this now
+# cuts ~12% (was ~4%); at 0.90, ~45%; at 1.0, 60%. SIZING ONLY, never direction.
+breadth_brake_start = 0.60
+breadth_brake_floor = 0.40
+breadth_brake_min_coins = 10
+
+[strategy_engine]
+# 4-layer strategy execution engine — AGGRESSIVE
+scan_interval_seconds = 45
+min_score_threshold = 0
+# Candidate-Block Data Integrity Fix — Issue 2 (2026-06-09) — Layer 1 input
+# gates, centralized (were hardcoded in the worker). A symbol whose newest
+# kline is older than kline_max_age_seconds is skipped before TA (logged
+# per-coin as STRAT_SKIP_STALE); a symbol with fewer than min_kline_count
+# candles is dropped from the Layer 1 set (now logged per-coin as
+# STRAT_SKIP_KLINE_COUNT instead of silently). Same defaults as before.
+kline_max_age_seconds = 300.0
+min_kline_count = 50
+# Candidate-Block Data Integrity Fix — Issue 5 (2026-06-09) — TradeScorer grade
+# composition, centralized (cutoffs were hardcoded). grade_threshold_* are the
+# total cutoffs for A+/A/B/C (same defaults). grade_quality_floor is the quality
+# sub-score (out of 20) below which a setup is low-quality — it drives the
+# always-on "quality LOW" annotation in the candidate block and, when the cap is
+# enabled, the grade cap. grade_quality_cap_enabled (default false) is a
+# behaviour-changing lever: when true a low-quality setup cannot carry a grade
+# above grade_quality_cap_max_grade (the canonical grade is lowered, which can
+# reach fund-manager sizing). Set grade_quality_floor = 0 to disable both.
+grade_threshold_a_plus = 80
+grade_threshold_a = 68
+grade_threshold_b = 56
+grade_threshold_c = 45
+grade_quality_floor = 10.0
+grade_quality_cap_enabled = false
+grade_quality_cap_max_grade = "B"
+min_ensemble_agreement = 2.5
+max_ensemble_opposition = 2.5
+# Layer 1 Defect 6 (2026-05-21) — STRONG-consensus thresholds. Must
+# compose correctly with the GOOD thresholds above: STRONG agreement
+# floor >= GOOD floor AND STRONG opposition ceiling <= GOOD ceiling
+# (STRONG is strictly STRICTER than GOOD). The EnsembleVoter __init__
+# self-check logs BOOT_ENSEMBLE_THRESHOLDS_OK when the composition is
+# sane, and AUTO-CORRECTS (clamps STRONG to be at least as strict as
+# GOOD, logs BOOT_ENSEMBLE_THRESHOLDS_AUTOCORRECTED) if it is ever
+# re-inverted (Issue #18/E15, 2026-05-28). Under current config
+# (GOOD 2.5/2.5) STRONG 4.0/1.5 composes correctly on both dimensions.
+min_ensemble_agreement_strong = 4.0
+max_ensemble_opposition_strong = 1.5
+# Layer 1 Defect 1 (2026-05-21) — when true (default per operator
+# decision), StrategyRegistry.get_active_for_regime filters
+# strategies via REGIME_ACTIVE_CATEGORIES (regime_types.py:18-38).
+# Set false to restore the pre-Defect-1 uniform-strategy behavior
+# (every enabled strategy votes regardless of regime) as an
+# emergency rollback. Per-call REGISTRY_REGIME_FILTER log line
+# records the active count.
+strategy_regime_filter_enabled = true
+max_setups_to_brain = 10
+max_brain_calls_per_hour = 30
+# Definitive-fix Phase 12 (2026-04-28) — ensemble voter diagnostics
+# + togglable single-strategy cap. Forensic D.1.6 captured AAVEUSDT
+# consensus flapping STRONG→GOOD→WEAK→STRONG across 6 cycles. The
+# vote-trace log is the investigation telemetry; the cap is a
+# safeguard that limits any single strategy's contribution to a
+# fraction of ``agreeing`` so STRONG always requires multiple
+# independent strategies.
+#   vote_trace_enabled: emit STRAT_VOTE_TRACE per STRONG coin per
+#     cycle. Cheap, togglable to silence in production once the flap
+#     is diagnosed.
+#   single_strategy_max_share: caps how much of one side's weighted
+#     vote total a single strategy may supply. 1.0 disables the cap;
+#     0.4 means no single strategy can supply more than 40% of the
+#     agreeing total, so a STRONG consensus requires breadth (~3
+#     strategies) rather than one loud voter.
+#   E28 (2026-05-28): ENABLED at 0.4 (completes #19). Safe vs current
+#     balanced STRONGs (each voter is well under the per-voter ceiling);
+#     minimal live effect while regime_weighting_enabled is false (a
+#     single equal-weight voter is already far below the STRONG floor),
+#     its real value is robustness for when weighting is on. The cap
+#     logs ENSEMBLE_DOMINANCE_CAP_BOUND whenever it clamps a voter.
+vote_trace_enabled = true
+single_strategy_max_share = 0.4
+# P2 entry-direction fix (2026-06-04) — two-sided ensemble vote. The strategy
+# vote() methods are direction-conditional confirmers: asked the originator's
+# direction they return that direction or NEUTRAL, never the opposite. So the
+# opposing side tallies zero even when strong opposing signals exist (a bearish
+# supertrend stays NEUTRAL when asked about a Buy). When true, the ensemble runs
+# a SECOND poll with the opposite direction and surfaces the honest opposing
+# weighted sum to the brain so it weighs a real Buy-vs-Sell contest — the brain
+# decides direction from the honest evidence, not a one-sided count. Does not
+# change the consensus label, sizing, or the vote cache. false = legacy.
+ensemble_two_sided_vote = true
+# Issue #19 fix (2026-05-27): enable the data-derived ensemble weighting LIVE.
+# Previously every strategy counted equally at 1.0, so the consensus the brain
+# reads had no track-record intelligence. The StrategyWeightDeriver weights each
+# (strategy, regime) cell by its realized PnL, and is GRADUAL BY DESIGN: a cell
+# stays at equal weight (1.0) until it has regime_weighting_cold_start_n (20)
+# supporting trades, the factor is EMA-smoothed across refreshes, and is bounded
+# to [regime_weighting_floor, regime_weighting_ceil] = [0.3, 3.0]. So the
+# immediate effect is small and grows as track record accumulates. Observe via
+# RW_REFRESH_OK (factor_range) and STRAT_VOTE_TRACE_SHADOW (would_change).
+# ROLLBACK: set this back to false and restart.
+regime_weighting_enabled = true
+
+[pnl_targets]
+# Daily PnL — 1% TARGET + CAPITAL PRESERVATION
+# Realistic 1%/day goal instead of the old 10% fantasy. The loss ladder is
+# tightened so the worst-case day is capped near -1% (was -10%) — once down
+# 0.3% we ease off, down 0.6% we quality-gate only, down 1.0% we halt. The
+# mode ladder in src/strategies/pnl_manager.py:get_current_mode reads these.
+daily_target_pct = 1.0
+protect_threshold_pct = 0.6
+caution_threshold_pct = -0.3
+survival_threshold_pct = -0.6
+halt_threshold_pct = -1.0
+
+[leverage]
+# Smart leverage — AGGRESSIVE
+max_leverage = 5
+tier_1_max = 5
+tier_2_max = 5
+tier_3_max = 4
+volatile_max = 4
+dead_max = 3
+min_confidence_for_5x = 0.65
+min_confidence_for_4x = 0.55
+
+[optimizer]
+# Weekly adaptive optimizer
+enabled = true
+run_day = "sunday"
+run_hour_utc = 0
+weight_adjustment_pct = 10
+max_param_change_pct = 20
+min_trades_for_optimization = 20
+underperform_threshold_pct = 10
+disable_after_weeks = 3
+
+[factory]
+# Strategy Factory: AI-powered pattern discovery and strategy generation
+enabled = false  # Disabled: 0 patterns discovered, 0 backtests run — wasting CPU
+discovery_schedule_hour_utc = 2
+discovery_lookback_days = 14
+min_pattern_occurrences = 10
+min_win_rate = 0.52
+min_profit_factor = 1.1
+min_statistical_significance = 0.05
+max_strategies_per_batch = 10
+max_generation_retries = 3
+generation_cost_limit_usd = 0.20
+live_monitor_interval_seconds = 300
+hot_pattern_threshold_win_rate = 0.70
+hot_pattern_threshold_occurrences = 3
+emergency_generation_enabled = true
+
+[backtesting]
+# Backtesting engine configuration
+initial_capital = 10000
+default_leverage = 3
+commission_pct = 0.06
+slippage_pct = 0.02
+funding_rate_pct = 0.01
+walk_forward_enabled = true
+train_pct = 0.70
+monte_carlo_runs = 1000
+min_trades_to_pass = 15
+min_win_rate = 0.50
+min_profit_factor = 1.1
+max_drawdown_pct = 20.0
+min_sharpe = 0.3
+min_walk_forward_efficiency = 0.4
+max_ruin_probability = 0.05
+
+[trial]
+# Paper trading trial configuration
+trial_duration_days = 3
+max_extensions = 1
+extension_duration_days = 7
+trial_position_size_pct = 50
+min_trades_for_evaluation = 5
+promotion_min_win_rate = 0.48
+promotion_min_pnl = 0.0
+promotion_max_drawdown = 10.0
+max_active_strategies = 80
+demotion_underperform_weeks = 2
+demotion_win_rate_drop_pct = 15
+quarterly_revival_enabled = true
+
+[portfolio]
+# Portfolio Optimizer — capital allocation and risk management
+enabled = true
+optimization_day = "sunday"
+optimization_hour_utc = 0
+kelly_fraction = 0.40
+min_trades_for_kelly = 20
+max_strategy_allocation_pct = 15.0
+min_strategy_allocation_pct = 2.0
+proven_strategies_budget_pct = 52.0
+ai_strategies_budget_pct = 33.0
+trial_strategies_budget_pct = 12.0
+cash_reserve_pct = 3.0
+correlation_lookback_days = 30
+high_correlation_threshold = 0.7
+daily_risk_budget_pct = 8.0
+drawdown_reduction_threshold_1 = 8.0
+drawdown_reduction_factor_1 = 0.7
+drawdown_reduction_threshold_2 = 15.0
+drawdown_reduction_factor_2 = 0.4
+kelly_weight = 0.30
+mean_variance_weight = 0.40
+risk_parity_weight = 0.30
+min_rebalance_change_pct = 2.0
+stress_test_enabled = true
+
+[telegram_interactive]
+# Interactive Telegram Bot
+enabled = true
+ai_responses_enabled = true
+max_ai_calls_per_hour = 20
+trade_confirmation_required = true
+morning_briefing_enabled = true
+morning_briefing_hour_utc = 5
+price_alert_check_interval = 10
+
+[fund_manager]
+# Intelligent Fund Manager — 22-module capital management
+enabled = true
+check_interval_seconds = 60
+starting_unlock_pct = 20
+active_pool_pct = 70
+aplus_reserve_pct = 20
+emergency_reserve_pct = 10
+profit_lock_pct = 50
+trade_profit_lock_pct = 25
+max_correlation_bucket_pct = 30
+min_profitable_trade_fee_pct = 0.12
+
+# ─── Phase 5 (post-Layer-1 fix): FundReconciler ──────────────────────
+# reconcile_enabled — master switch. When False, the FundReconciler
+#   worker is not registered; balance drift will go undetected until a
+#   trade is rejected by Bybit (ErrCode 110007). Strongly recommended
+#   to keep True in any environment with a real Bybit wallet.
+# reconcile_interval_seconds — heartbeat cadence. 60 s is the minimum
+#   sensible cadence given Bybit's REST quota and the typical drift
+#   evolution rate. Faster reconciliation does not help; slower means
+#   drift can persist longer before alerting.
+# reconcile_drift_alert_threshold_pct — absolute drift % between local
+#   total_equity and exchange total_equity past which a WARNING +
+#   Telegram alert fires. 5 % is conservative — typical post-trade
+#   noise from fee deductions and unrealized PnL is well under 1 %.
+# reconcile_auto_correct — when True, drift triggers an in-place
+#   overwrite of local total_equity from exchange. OFF by default
+#   because auto-correcting silently is not auditable; operators
+#   must opt-in explicitly.
+reconcile_enabled = true
+reconcile_interval_seconds = 60
+reconcile_drift_alert_threshold_pct = 5.0
+reconcile_auto_correct = false
+
+[sentiment]
+# CALL_B Framing Fix Phase 5B (2026-05-06) — sentiment consumption gate.
+# Per operator decision: disable consumption (do not remove the code).
+# Reddit is config-disabled (`[reddit].enabled = false`), Finnhub free
+# tier has no altcoin coverage, so the sentiment subsystem is
+# load-bearing only ~3% of the time. With this flag false the
+# SignalGenerator skips the sentiment branch in its multi-source
+# classifier and the SentimentAggregator silences the per-coin
+# SENT_DEGRADED_MODE log spam (init-time WARNING stays). Re-enable
+# when the data flow is restored.
+consumption_enabled = false
+
+[enforcer]
+# Enforcer v2 — PnL-Based Intelligent Throttling
+# 2026-07-07 (win-rate enhancement Phase C): flipped false -> true for
+# downside protection while the entry-quality filters are validated: -3%
+# day clamps leverage to 3x + max 3 positions; -12% survival gates; -15%
+# blocks new trades. size_reduction_enabled below stays false (brain-
+# authoritative sizing unchanged). Rollback: enabled = false.
+enabled = true
+check_interval_seconds = 60
+
+# PnL-based thresholds (daily PnL %)
+# Phase 4 of dir-block-fix (2026-05-05): raised thresholds (was
+# -2.0 / -5.0) so the enforcer no longer treats normal daily noise as
+# a defensive event. The 2026-05-05 STRAT_EXEC_BLOCKED at -0.85 % PnL
+# came through the streak-boost path (5+ consecutive losses) — also
+# tightened below — but the PnL-caution threshold itself is now far
+# above normal noise so the PnL-only path requires real drawdown.
+pnl_caution_pct = -3.0              # Below this → el=1 (capital preservation)
+# CALL_B Framing Fix Phase 2A (2026-05-06): operator decided to raise
+# SURVIVAL trigger from -7.0 to -12.0 so RR=2.5 trades stop being
+# blocked by the survival_block gate during normal recovery drawdown.
+# HALTED at -15.0 preserves a real emergency stop above SURVIVAL.
+pnl_survival_pct = -12.0            # Below this → el=2 (survival)
+pnl_halted_pct = -15.0              # Below this → el=3 (halted — no new trades, emergency only)
+
+# Size reduction for mild negative PnL.
+# DISABLED 2026-05-31 (operator): with brain-authoritative fund management the
+# brain sizes against the real usable-capital picture, so the PnL-band size
+# multiplier (×0.75 / ×0.50 / ×0.25 when the day is red) was just shrinking the
+# brain's deliberate sizes. False -> get_size_multiplier() returns 1.0 (no size
+# reduction). The emergency QUALIFY-GATE halts (el=3 at -15% PnL stop new trades)
+# are SEPARATE and remain active. Instant revert: set true.
+size_reduction_enabled = false
+size_reduction_at_pnl_pct = 0.0     # Start reducing below this PnL %
+size_reduction_factor = 0.75        # 25% smaller positions (0% to caution)
+
+# Streak as secondary signal (only when PnL is negative)
+# Phase 4 of dir-block-fix (2026-05-05): raised -5 → -8 and added
+# streak_boost_pnl_floor_pct so the streak path no longer elevates
+# level on losing streaks during near-flat days.
+streak_boost_threshold = -8         # 8-loss streak + meaningfully negative PnL → el=1
+streak_boost_pnl_floor_pct = -1.0   # streak path inactive when pnl >= this
+
+# Auto-recovery
+max_enforcement_minutes = 45        # Auto-recover after stuck at el>=1
+grace_period_minutes = 30           # Manual reset grace (full skip)
+
+# Per-level restrictions
+level_1_max_positions = 3
+level_1_max_leverage = 3
+level_1_min_score = 75
+level_2_max_positions = 2
+level_2_max_leverage = 3
+level_2_min_score = 80
+level_2_min_confluence = 7
+level_2_min_rr = 3.0
+
+# Legacy fields (kept for backward compatibility)
+decay_minutes = 60
+min_trades_per_hour = 20
+min_profit_per_hour_pct = 5.0
+min_win_rate = 0.45
+min_signals_per_hour = 50
+min_setups_to_brain_per_hour = 10
+max_seconds_between_trades = 90
+max_escalation_level = 5
+force_trade_on_gap = true
+rewards_enabled = true
+hourly_report_enabled = true
+
+[mode4]
+# Mode 4: ProfitSniper — institutional-grade profit protection (Phase 1-10)
+# 5 mathematical models: Hurst, Momentum Decay, ATR Extension,
+# Volume Divergence, Risk/Reward. Regime-aware scoring + ATR trailing.
+enabled = true
+check_interval_seconds = 5
+
+# Ring Buffer (Phase 1)
+buffer_max_size = 720                    # 60 minutes at 5s (720 entries)
+buffer_min_ready = 100                   # Need 8+ minutes for valid models
+
+# Trailing System (Phase 8)
+base_atr_multiplier = 2.5               # Chandelier Exit base width in ATR units
+trail_min_change_pct = 0.1              # Min SL change % to avoid Shadow flooding
+regime_factor_trending = 1.3            # Wider trail — let trends run
+regime_factor_ranging = 0.7             # Tighter trail — reversion likely
+regime_factor_volatile = 1.0            # Standard trail — volatility in ATR
+regime_factor_dead = 0.6               # Tightest trail — no momentum, protect gains
+
+# Anti-Greed (Phase 9) — pullback backstop
+anti_greed_enabled = true
+anti_greed_pullback_40_min_peak = 2.0   # Min peak % for 40% pullback → tighten
+anti_greed_pullback_60_min_peak = 3.0   # Min peak % for 60% pullback → partial
+anti_greed_pullback_75_min_peak = 5.0   # Min peak % for 75% pullback → full close
+
+# Action cooldowns (Phase 9)
+# Phase 2 of dir-block-fix (2026-05-05): lowered 30 → 15 so M4 can
+# react inside the same anti-greed pullback window. Pre-fix BSBUSDT
+# 2026-05-05 18:04-18:05 had M4_GATED tighten attempts at pullback
+# 30-60 % from peak, all blocked by the 30 s cooldown; the position
+# then closed via SL hit at +0.66 % after peaking +1.92 %.
+tighten_cooldown_seconds = 15
+partial_close_cooldown_seconds = 120
+partial_close_pct = 50                  # % of position to close on partial action
+
+# Sniper partial-close disable (2026-05-26, operator decision). false =
+# the sniper never partial-closes a position; any score/greed/stall-escape
+# partial_close is downgraded to a winner-trail tighten (no reduce-only
+# fill, no fee, no winner-clip). The winner trail, full_close, time-decay,
+# sentinel, hard stop, native stop, and SL gateway are unaffected. Set to
+# true to restore the legacy partial-close behaviour.
+sniper_partial_close_enabled = false
+
+# Phase 4 (Sniper-loop fix) — type-agnostic per-position cooldowns.
+# The legacy partial_close_cooldown_seconds only blocked the NEXT
+# partial when the IMMEDIATELY-prior action was also a partial; an
+# alternating tighten ↔ partial pattern defeated it (INJUSDT 21:48
+# bug, 4× partials in 60s). The new gate is type-agnostic.
+min_seconds_between_actions = 60        # any M4 action of any type starts this cooldown
+min_seconds_before_close = 180          # full_close from score branch (anti-greed bypasses)
+# Phase 4 (Sniper-loop fix) — PROFIT GATE on partials. The legacy
+# P9_CLOSE_GATE only gates full_close; a partial could fire on a red
+# position. Default 0.0 = require break-even before any partial fires.
+min_profit_for_partial_pct = 0.0
+
+# Phase 9 Sniper Stall Escape (P1-8) + Phase 4A de-escalation (session-stability)
+# Escalation fires when the sniper is stuck at "actionable=True but action=hold".
+# Layer 4 Realignment Phase 1B (2026-05-06): recalibrated 20→120 (partial)
+# and 40→180 (full) to match the operator's 10-30 minute hold strategy.
+# Old values (20/40 ticks = 100/200 s) killed positions in the first
+# 1:40-3:20 of life, well below the 10-min strategy minimum. New values
+# (120/180 ticks = 10/15 min) let positions develop their normal pattern
+# before the sniper begins evaluating, and preserve a 60-tick (5-min)
+# grace gap between the partial-close emission and the forced full-close.
+# Phase 0 baseline showed median sniper hold of 5.8 min (max 7.6 min),
+# none reaching 10 min — under the new defaults the stall counter would
+# not have reached the partial threshold for any of the 18 closes.
+stall_escape_partial_after_ticks = 120   # ~600s at 5s cadence → first escape (10 min)
+stall_escape_full_after_ticks = 180      # ~900s at 5s cadence → escalate to full (15 min)
+# After any escape emission the stall method waits this long before emitting again.
+# Stops the 20x PARTIAL_CLOSE_UNSUPPORTED warning spam observed 2026-04-24.
+stall_escape_cooldown_seconds = 30
+# After this many tighten_agg downgrades without PnL recovery of at least
+# stall_recovery_threshold_pct from the worst-observed PnL, escalate to full_close.
+stall_tighten_max_applications = 3
+stall_recovery_threshold_pct = 0.15
+# Definitive-fix Phase 10 (2026-04-28) — partial-emit lifetime cap per
+# position. Forensic S6: a stalled position fired 5 partial_close
+# actions in 5 minutes (cooldown elapsed → partial → cooldown → partial
+# … salami-slicing). Once a position has spent its partial budget,
+# the next stall escape is full_close instead of another partial.
+# Reset on _on_position_opened so each position gets a fresh budget.
+# Layer 4 Realignment Phase 1D (2026-05-06): raised 1 → 3 to give
+# positions room to recover via multiple partial closes before forced
+# full close. Combined with Phase 1B's 60-tick (5-min) grace gap
+# between partial and full, three partials give roughly 15 minutes of
+# recovery opportunity before the position is forcibly exited.
+max_partials_per_position = 3
+
+# Sniper-Latency-Size Fix Phase 1 (2026-05-07) — enforced grace gap between
+# stall-escape emissions on the same position. Phase 1D (commit 04a8170)
+# claimed Phase 1B's 60-tick gap was implicitly enforced, but Phase 1B
+# only set absolute thresholds (120 partial, 180 full). The ladder
+# observed 2026-05-07 10:57:40-10:59:19 fired 4 escalations on RENDERUSDT
+# in 99 seconds (gaps 5/6/5 ticks) because only the 30-second blanket
+# cooldown gated re-emission. The keys below add an explicit minimum
+# inter-escape spacing keyed on tick count so a position partial-closed
+# at tick=121 cannot be partial-closed again or full-closed (from the
+# cap path) until tick>=181 — five minutes of recovery time.
+# The forced-full path (`ticks > stall_escape_full_after_ticks`) is the
+# mature-stall valve and bypasses the grace gap by design.
+partial_to_full_grace_ticks = 60          # Min ticks between partial emission and full close
+partial_to_partial_grace_ticks = 60       # Min ticks between consecutive partials
+
+# Logging / DB write throttle (Phase 10)
+log_every_n_ticks = 6                   # M4_EVAL log every 30s (6 × 5s)
+log_always_above_score = 50             # Always log if composite score >= this
+sniper_log_write_every_n_ticks = 6      # Write to DB every 30s minimum
+
+# Legacy classification thresholds — used by _classify_score() for M7 labels
+score_watch = 30
+score_consult_claude = 50
+score_auto_partial = 70
+score_auto_full = 85
+
+# Legacy profit/immunity filters — used by _classify_score()
+min_profit_pct = 0.8
+min_profit_for_action = 0.10             # Min PnL% before Mode4 Phase 9 takes action
+profit_immunity_seconds = 60
+loss_immunity_seconds = 30
+full_rules_after_seconds = 300
+
+# Legacy cooldowns — used by is_in_cooldown() / _is_safe_to_execute()
+cooldown_extreme_seconds = 300
+cooldown_strong_seconds = 180
+cooldown_medium_seconds = 120
+
+# Legacy Claude settings — kept for _consult_claude() method
+claude_timeout_seconds = 15
+max_claude_queries_per_hour = 10
+claude_hold_recheck_seconds = 30
+
+# Legacy model weights (must total 100) — used for M7 counterfactual snapshot
+weight_zscore = 25
+weight_velocity = 25
+weight_volume = 20
+weight_bollinger = 15
+weight_momentum = 15
+
+# Legacy flash crash protection
+flash_crash_auto_score = 70
+
+# TRADE LIBERATION: Trail distance floors + activation threshold
+min_trail_atr_multiplier = 1.5              # Min trail = 1.5 × ATR (noise floor)
+min_trail_pct = 0.30                        # Min trail as % of entry price
+# Phase 2 of dir-block-fix (2026-05-05): raised 0.30 → 0.50 so the
+# trail does not begin tightening until the position is meaningfully
+# in profit. Combined with max_step_pct=0.25 and tighten_cooldown=15,
+# this lets winners breathe instead of locking in scraps.
+# DEPRECATED (PF/LC Top-15 Problem 2.4) — superseded by
+# [profit_fetching] min_profit_for_trail_pct (aligned to the ladder arm at 0.2).
+# Left in place for back-compat; the sniper no longer reads this key.
+min_profit_for_trail_pct = 0.50             # Min peak PnL% before trail activates
+min_profit_decay = 0.50                     # Floor for profit_decay factor
+
+# T1-3 (2026-05-12) — Trail floor from CURRENT price (mean-reversion guard).
+# The min_trail_pct/atr_multiplier above bound only the from-PEAK distance.
+# As price oscillates BELOW peak, sl_dist_to_cur can shrink to noise levels
+# (~0.15 %) and trigger SL on bid-ask jitter. Empirical bug fired on
+# ARBUSDT/SKRUSDT 2026-05-12 with sl_dist=0.15 % vs 0.13 % noise band.
+# Formula in profit_sniper._apply_trail_stop:
+#   floor_pct = clamp(max(min_pct, atr_5m_pct * atr_mult), upper=max_pct)
+# Behaviour: CLAMP outward to floor_pct away from current_price; preserve
+# trail intent. Reject only when the clamp would loosen prior cur_sl
+# (logged as action=reject_would_loosen).
+# Defaults sit ~2x above the gateway R2 effective floor on dead coins so
+# trail-layer protection is real. Tunable downward only after a session of
+# SNIPER_TRAIL_FLOOR_CLAMP observability proves the formula is too strict.
+trail_floor_from_price_atr_multiplier = 0.75   # 5m NATR multiplier
+trail_floor_from_price_min_pct = 0.20          # absolute floor (%)
+trail_floor_from_price_max_pct = 1.50          # safety cap (%)
+
+# =============================================================================
+# Layer 4 Realignment (2026-05-06) — Profit Sniper protection knobs
+# =============================================================================
+# Knobs added by the Layer 4 Comprehensive Realignment fix to align the
+# Profit Sniper with the operator's aggressive-exploitation philosophy.
+# These do NOT replace [mode4] — they ADD a thin protection layer in
+# front of the existing stall-escape decision so fresh trades,
+# profitable trades, and developing trades are not killed before they
+# have a chance to resolve. The whole [mode4] stall escalation logic
+# remains intact and runs as before; this section just gates ENTRY into
+# that logic on age/PnL boundaries that mirror the other Layer 4 paths.
+#
+# Phase 1A — minimum-age guardrail. Mirrors
+# `watchdog.strategic_action_min_hold_seconds` (300 s) and
+# `time_decay.min_age_seconds` (300 s). Below this age, the sniper's
+# stall counter does not advance — fresh positions cannot be
+# force-closed by the sniper.
+#
+# Phase 1C (added in a later sub-phase commit) — PnL-aware stall escape.
+# `profit_protection_threshold` blocks the stall counter on profitable
+# positions; `development_window_lower` blocks it on positions still
+# inside the normal small-loss development window. Together these stop
+# the give-back pattern (winning trades killed because the stall counter
+# expired) and the kill-too-early pattern (positions at -0.1 % that
+# would have resolved given more time).
+[layer4.sniper]
+min_age_seconds = 300                       # Phase 1A — block stall escape on positions younger than 5 min
+profit_protection_threshold = 0.0           # Phase 1C — block stall escape when pnl > this (winners protected)
+development_window_lower = -0.3             # Phase 1C — block stall escape when pnl > this (still developing)
+
+# Issue C fix Phase 3b (2026-05-08) — peak-protected stall extension.
+# Positions whose ``state.peak_pnl_pct`` ever crossed
+# ``peak_protection_threshold_pct`` get the extended
+# ``peak_protected_full_after_ticks`` (default 80, ~6.7 min at 5 s
+# cadence) before the mature-stall valve fires, instead of the base
+# ``Mode4Settings.stall_escape_full_after_ticks`` (default 40,
+# ~3.3 min). The 13:00–16:00 UTC 2026-05-08 audit showed 4 valve
+# closures of which 2 (INJUSDT peak +0.30 %, ARBUSDT peak +0.13 %)
+# had clearly demonstrated edge before reverting and would have been
+# spared. SANDUSDT (peak +0.06 %) and HYPERUSDT (peak 0 %) remain
+# below the default threshold and continue to be killed at the base
+# 40-tick threshold — runaway-loss protection preserved.
+# Set ``peak_protection_threshold_pct = 0`` to disable (kill-switch).
+peak_protection_threshold_pct = 0.10        # min peak PnL % to qualify for extension
+peak_protected_full_after_ticks = 80        # extended tick threshold when peak qualifies
+
+# Issue C fix Phase 3c (2026-05-08) — recovering-PnL gate. Even when
+# ticks would otherwise force the mature-stall valve, a position
+# rebounding by at least ``recovering_threshold_pct`` from its worst
+# observed PnL is given another tick. Distinct from the existing
+# ``stall_recovery_threshold_pct = 0.15 %`` (under [mode4]) which
+# only escapes the tighten-cap branch; this new gate protects the
+# tick-count path too. Set ``recovering_threshold_pct = 0`` to
+# disable.
+recovering_threshold_pct = 0.10             # min PnL recovery delta from worst to spare valve
+
+# =============================================================================
+# Profit-Fetching Exit System (2026-05-29)
+# Time-driven whole-position exit engine integrated into the ProfitSniper.
+# See PROFIT_FETCHING_SYSTEM_MASTER_BLUEPRINT.md. EVERY value below is a
+# STARTING POINT for tuning, not a final number — honest tuning waits for
+# truthful after-cost PnL. The time dial (src/core/time_dial.py) slides each
+# *_young anchor toward its *_old anchor as a trade ages from 0 to its
+# per-trade deadline (the brain's max_hold_minutes).
+# =============================================================================
+[profit_fetching]
+# Master switch. true = the engine is active on the next restart (operator
+# Phase 1 gate, 2026-05-29). false = legacy trail/deadline/profit-take only.
+enabled = true
+
+# Techniques 2+4 — ATR / Chandelier trail distance multiple (in ATR units).
+# Wide young (let the move breathe), tight old (protect the gains).
+atr_multiple_young = 3.0
+atr_multiple_old = 1.0
+# PF/LC Top-15 Problems 3.2 + 3.5 — feed the per-tick Chandelier trail the real
+# M5 Wilder ATR (the warm-seeded _get_current_atr the loss path already uses)
+# instead of the cold ring-buffer proxy, preserving the live -> entry-ATR ->
+# floor fallback for cold-start. When on, the SNIPER_ATR_FALLBACK log is rare
+# and demoted to DEBUG. Default false → prior source and INFO log unchanged.
+# Direction-reconcile fix (2026-06-04, Problem 3 / F12,F27) — turned ON. With it
+# OFF the trail used the cold ring-buffer atr_current (0 for a freshly-opened
+# low-data coin like MON), so the volatility-adaptive Chandelier was pinned to
+# the STATIC entry ATR and its stop updates no-op'd. ON routes the trail to the
+# warm-seeded, live-recomputing _get_current_atr so it adapts to live volatility.
+trail_live_m5_atr_enabled = true
+
+# Technique 1 — stepped break-even ladder.
+# Step spacing: profit climb needed to trigger the next lock (percent).
+# Wider young, tighter old (grab profit in smaller increments late).
+ladder_step_pct_young = 0.6
+ladder_step_pct_old = 0.4
+# Lock offset behind each crossed level (percent). Looser young, tighter old.
+# At step 0.5 / offset 0.3 a +0.5% crossing locks +0.2% (blueprint example).
+lock_offset_pct_young = 0.3
+lock_offset_pct_old = 0.2
+# First ladder level — profit must reach this percent before the ladder arms.
+# Item 2.1 / O1 (2026-06-03) — lowered 0.5 -> 0.2 so the zero-crossing breakeven
+# floor (ladder_breakeven_lock_pct, below) actually ENGAGES on the modest-peak
+# faders. The live study found 108 of 162 round-trip losers peaked in the gap
+# [0.05%, 0.5%): they went green but never reached the 0.5% arm, so the floor was
+# structurally unreachable and they round-tripped into a loss. Guardrail (fresh
+# data): ZERO winners peaked below 0.2% (winner peak p10 0.447%), so lowering to
+# 0.2 cannot strangle a slow-starter. Deliberately NOT lowered to 0.1 in one step.
+# This also graduates loss->profit authority 0.3% earlier (the same threshold
+# drives the GRADUATION_LATCH). PROVISIONAL pending truthful PnL. OFF-SWITCH: set
+# ladder_breakeven_lock_pct <= 0 to disable the floor entirely (arming at 0.2 then
+# locks nothing until a real rung, i.e. the pre-fix behaviour), or restore 0.5
+# here to revert the arm change alone.
+min_profit_to_arm_ladder_pct = 0.2
+# PF/LC Top-15 Problem 2.4 — the Chandelier trail's activation threshold,
+# aligned to the ladder arm (0.2%) so the ladder and the trail coexist across
+# the full graduated band instead of the trail sitting idle in the 0.2-0.5%
+# band. Supersedes [mode4] min_profit_for_trail_pct (0.5), now deprecated.
+min_profit_for_trail_pct = 0.2
+# Finding 6 (2026-06-02) — zero-crossing breakeven floor. The arm threshold
+# (0.5%) sits below the first step rung (step_young 0.6%), so a modest peak in
+# [arm, first_step) used to arm the ladder but lock nothing, and a +0.59% peak
+# rode back to a small loss. Once the high-water profit reaches the arm
+# threshold this guarantees at least this much locked profit (a breakeven-plus-
+# sliver floor) while price is still up, so the stop ratchets to at least
+# breakeven; the normal step lock takes over once a real rung is crossed. The
+# min-distance rule is not loosened — breakeven is reached by locking earlier.
+# PROVISIONAL pending truthful PnL. A value <= 0 is the clean off-switch (the
+# modest in-the-gap peak locks nothing, the old behaviour).
+ladder_breakeven_lock_pct = 0.05
+# Fix 3 (2026-06-05) — dead-band give-back trail. A peak in [arm 0.2%, first
+# step 0.6%) locked only the breakeven sliver above and gave back the whole
+# modest peak (IMXUSDT +$21 booked -$5). > 0 trails a floor this far below the
+# high-water peak inside that band: lock = max(be_lock, peak - giveback). 0.10
+# = a +0.22% peak banks +0.12%. Tighten-only. <= 0 = old breakeven-only. PROVISIONAL.
+ladder_deadband_giveback_pct = 0.10
+# Finding A (2026-06-08) — fee-aware breakeven/first-lock. A gross-positive
+# "breakeven" lock that does not clear the round-trip taker fee (~0.11% of
+# notional) still books a small NET loss after fees (the dominant small-loss
+# mechanism: NEAR locked +0.035% -> net -$4.57). When a sub-fee floor would lock
+# AND the trade's peak has cleared this hurdle, the floor is raised to this
+# fee-clearing level so a "breakeven" lock is net-breakeven. Must be >= the
+# round-trip taker fee (0.055% x 2 = 0.11%); 0.13 = fee + a small margin. Never
+# lifts the lock above the reached peak; step locks (>= ~0.3%) already clear it.
+# 0 = off (restore gross locks). PROVISIONAL — a tuning starting point.
+ladder_lock_fee_clearance_pct = 0.13
+# Issue 1 (CALL_A exploit/fetch, 2026-06-05) — decoupled micro-floor arm. The
+# floor armed at min_profit_to_arm_ladder_pct (0.2%), but that SAME 0.2% also
+# triggers the one-way GRADUATION_LATCH (loss-cutting hands authority to the
+# profit system), so it could not be lowered naively without stripping
+# spike/cap/stall protection on a trade that only briefly poked green. Most
+# losers peak under +0.2% (median ~+0.07%) and round-trip because the floor
+# never arms. This separate, lower arm engages ONLY the breakeven/dead-band
+# floor (captures the small green where the gateway min-distance allows,
+# at-least-breakeven elsewhere) while GRADUATION_LATCH still reads 0.2%, so
+# loss-cutting authority is retained until genuine +0.2%. Bounded to never
+# exceed the graduation arm. Set equal to min_profit_to_arm_ladder_pct to
+# restore the old single-arm behaviour. Tuning starting point.
+micro_floor_arm_pct = 0.10
+
+# F2 (fee-scratch churn, 2026-06-09) — fee-aware micro-floor arm. The micro arm
+# above (0.10%) and the breakeven lock (ladder_breakeven_lock_pct, 0.05%) both sit
+# BELOW the round-trip taker fee (~0.11%); the fee-aware LIFT
+# (ladder_lock_fee_clearance_pct, 0.13%) only fires when peak > 0.13%. So a trade
+# peaking in [micro_floor_arm_pct, ladder_lock_fee_clearance_pct) arms a breakeven
+# stop that is never lifted, locks sub-fee, and books a guaranteed NET FEE LOSS
+# when a tiny pullback taps it — the proven sub-2-minute fee-scratch mechanism. When
+# true, the effective arm becomes max(micro_floor_arm_pct, ladder_lock_fee_clearance_pct),
+# still clamped to the graduation arm, so the floor does not arm (and pull the stop
+# to a sub-fee breakeven) until the peak has cleared the SAME fee hurdle the lift
+# uses; below that the trade keeps its original wider stop and breathes, with
+# loss-cutting authority retained. Reuses the existing fee value (no inline fee),
+# consistent with the Finding-A exit lift. DEFAULT OFF (behaviour-preserving): F2
+# must be measured against truthful PnL, available only after the pending F5/F1
+# restart. Also off via ladder_lock_fee_clearance_pct <= 0. Observable via the
+# MICRO_FLOOR_FEE_SUPPRESS event. Set true only after the post-restart measurement.
+micro_floor_arm_fee_aware_enabled = true
+
+# Item 2.2 / O6 / F12 (2026-06-03) — jump the breakeven floor on the arming tick.
+# The ladder already bypasses the gateway max-step (R3), but the sniper still
+# skips a write inside the 30s gateway rate-limit (R4) window, so the FIRST
+# breakeven lock can lag up to 30s and a modest peak that fades inside that
+# catch-up window round-trips despite arming the ladder (Finding 12, e.g. DYDX
+# captured only ~46% vs 75-89% on clean runners). When true, the single arming
+# tick (the not-armed -> armed transition of the zero-crossing floor) also
+# bypasses the rate-limit so the floor lands immediately in one move, as tight as
+# the gateway min-distance allows. R1 tighten-only and R2 min-distance still
+# apply (it can never loosen or sit on noise); the bypass is one-shot per
+# position. Also gated by ladder_breakeven_lock_pct > 0. Set false to keep the
+# floor but revert to the rate-limited first lock. PROVISIONAL pending truthful
+# PnL. Observable via the LADDER_FLOOR_JUMP sentinel.
+ladder_floor_jump_on_arm = true
+
+# F6 (2026-06-09) — first step-rung lock jump. ladder_floor_jump_on_arm above
+# covers ONLY the zero-crossing breakeven floor. On a FAST young pop the price
+# clears the first real step rung before the breakeven floor ever gets its turn,
+# so the FIRST step-rung lock (a real guaranteed-profit lock) is the one delayed
+# up to the 30s rate-limit window — the choppy-capture collapse. When true, that
+# first step-rung lock also bypasses the rate-limit and lands in one move,
+# one-shot per position (subsequent ratchets use the normal cadence). It is
+# distinct from and mutually exclusive with the breakeven-floor jump. R1
+# tighten-only and R2 min-distance still apply (it can never loosen or sit on
+# noise); it only removes the rate-limit wait on the first real lock. DEFAULT OFF
+# — ships inert. Set true only after live observation. Observable via the
+# LADDER_FIRST_LOCK_JUMP sentinel.
+ladder_first_lock_jump_enabled = true
+
+# Technique 3 — time-decay dial shape. Transition centres near this age
+# (data: ~22-min peak). Documentation only for now (simple linear glide).
+peak_minutes = 22.0
+
+# Fallback deadline (minutes) for the time dial when a position has no
+# registered TradePlan (e.g. externally-opened). Analyzed working max hold ~50.
+default_deadline_minutes = 50.0
+# PF/LC Top-15 Problem 2.5 — freeze the time dial on the ORIGINAL deadline when
+# the watchdog extends a near-flat loser, so the extension grants grace on the
+# close-timer without re-loosening the protective dial (the dialed
+# stall_min_age_fraction / cap / structure buffer slide back toward their young
+# anchors as the age fraction drops, and those non-stop force-close paths are
+# not protected by R1). Default false: the audit measured the net effect as a
+# near-wash, so this is the operator's call. True freezes the dial denominator.
+dial_freeze_on_original_deadline_enabled = false
+
+# Safety stop — loss cap for non-climbers and the naked-position sweeper
+# (percent). Constant (not dialed). Sits inside the -3% watchdog hard stop.
+safety_stop_pct = 2.5
+
+# ATR-zero hardening fallback (consumed in Phase 2). When live ATR reads zero
+# AND entry-ATR is unavailable, the trail uses this percent-of-price distance
+# so a position can never end up with no trailing protection.
+atr_zero_fallback_pct = 0.5
+
+# Phase 5 — Full reconciliation of the watchdog winner-cutters. Each is
+# independently revertible (flip false to restore that legacy watchdog path)
+# and additionally gated by `enabled`.
+# Ride a still-profitable trade past its deadline on the sniper's tight trail
+# instead of the SENTINEL hard-close.
+ride_winner_past_deadline = true
+# Skip the watchdog +1.5%-past-half-time profit-take close.
+subordinate_profit_take = true
+# Fully disable the watchdog percentage trail (activation/SL-push/exit) so the
+# sniper spine is the sole trailing-SL writer.
+subordinate_watchdog_trail_exit = true
+
+# Phase 6 — safety stop / naked-position sweeper. A naked position is always
+# given a safety stop (safety_stop_pct off entry) when enabled. When
+# safety_floor_reassert is true the floor is also re-asserted (tighten-only) on
+# any position whose existing stop is looser than the floor; set false to only
+# fill fully-naked positions and never override a brain-set wider stop.
+safety_floor_reassert = true
+
+# =============================================================================
+# Loss-Cutting System (2026-05-31)
+# The protective half of the position-management engine (companion to
+# [profit_fetching]). Integrated into the SAME ProfitSniper spine + SLGateway.
+# See LOSS_CUTTING_SYSTEM_MASTER_BLUEPRINT.md. EVERY value below is a STARTING
+# POINT for tuning, not a final number — honest loss-reduction tuning waits for
+# truthful after-cost PnL. The loss time dial (src/core/time_dial.py
+# resolve_loss) slides each *_young anchor toward its *_old anchor as a trade
+# ages from 0 to its per-trade deadline; the volatility (ATR) dial is applied in
+# the sniper by multiplying the dialed multiple by the effective ATR.
+# Authority split: PnL>=0 -> profit-fetching manages; PnL<0 -> this system.
+# =============================================================================
+
+# =============================================================================
+# DYNAMIC ADAPTIVE EXIT SYSTEM (2026-06-15)
+# Converts the fixed exit thresholds into bounded multiples of R (the coin's
+# ATR-as-percent, the movement unit); every PROFIT threshold floors at the
+# round-trip fee so a locked win is net-positive. The pure geometry lives in
+# src/analysis/vol_scale.py and reads these coefficients (nothing hardcoded
+# inline). The owner hierarchy is unchanged; this only sets the VALUES it
+# writes. Tuned on the replay (simulate_adaptive_exit_replay.py); re-tunable
+# here without code. Lands DORMANT (enabled=false): geometry + config load but
+# no consumer reads them until verification flips this on, one commit at a time.
+# See ADAPTIVE_EXIT_PHASE3_DESIGN.md.
+# =============================================================================
+[adaptive_exit]
+enabled = true
+
+# The fee floor — the spine. Every profit threshold floors at this.
+round_trip_fee_pct = 0.11          # canonical round-trip taker fee for exit geometry
+fee_floor_buffer = 1.0             # fee floor = round_trip_fee_pct * buffer
+
+# R smoothing — EMA on the per-position movement unit (alpha in (0,1]; 1.0 = off).
+# The profiler's 60-120s cache already makes R step-wise stable; this smooths the
+# step transitions. Applied at the fetch boundary, never inside the geometry.
+r_smoothing_alpha = 0.3
+
+# The arm: max(arm_r * R, fee_floor), bounded.
+arm_r = 0.5
+arm_min_pct = 0.0
+arm_max_pct = 1.0
+
+# The ladder rungs (in R) and staged capture.
+rung_r = [1.5, 3.0, 5.0]
+secure_at_3r_r = 1.5               # secured profit (in R) once the middle rung is crossed
+lock_max_pct = 0.0                 # 0 = naturally bounded by the peak
+
+# The trail fraction of R behind the peak (consumed by profit_lock_pct). 0.5R
+# tuned on the replay (realized peaks are ~1R, so a tight trail captures more).
+trail_r = 0.5
+
+# Profit-scaled trail tightening (2026-06-26 give-back fix). The trail coefficient
+# starts at trail_r for young/small movers and decays toward trail_r_floor as the
+# running peak grows in R units, so a larger green trade locks progressively nearer
+# its peak (protection tightens as profit grows). See vol_scale.effective_trail_r.
+#   eff = trail_r_floor + (trail_r - trail_r_floor) / (1 + max(0, peak/R - knee)/scale)
+# SHIPPED INERT: trail_r_floor = trail_r = 0.5 makes the term a constant trail_r,
+# byte-identical to the pre-fix half-R trail. Activation is a single flip of
+# trail_r_floor below trail_r (replay-selected) AFTER the operator gate.
+trail_r_floor = 0.30               # ACTIVE (mild, operator-activated 2026-06-26): trail tightens toward 0.30R as the peak grows past the knee
+trail_tighten_knee_r = 1.0         # no tightening until the peak clears this many R (over-tighten guard)
+trail_tighten_scale_r = 1.0        # R above the knee over which the coefficient decays toward the floor
+
+# The hard stop: a wide R-multiple backstop below the sacred cap (the cap is
+# enforced separately and always fires first).
+# The hard stop is a wider BACKSTOP than the sacred cap: floored at/above the
+# young cap (2.5%) so it never preempts the cap (which fires first), capped at a
+# sane outer bound. Replaces the flat -3% (too loose for quiet coins, too tight
+# for volatile ones). 9R: R=0.3% -> 2.7%, R=0.6% -> 5.4%, R>=1.1% -> 10% cap.
+hard_stop_r = 9.0
+hard_stop_min_pct = 2.5            # >= the young cap so the cap stays operative
+hard_stop_max_pct = 10.0          # outer sanity bound for high-vol coins
+
+# The dead-drifter scratch (conservative: release only late, no-1R, veto silent).
+dead_drifter_enabled = true
+dead_drifter_age_fraction = 0.70
+dead_drifter_min_move_r = 1.0
+
+# =============================================================================
+# Authority split (loss-cutting): PnL<0 -> this system.
+# =============================================================================
+[loss_cutting]
+# Master switch. true = the engine is active on the next restart (operator
+# default ON, mirroring profit-fetching). false = legacy watchdog backstops only.
+enabled = true
+
+# Per-technique enable flags (each independently revertible without code).
+enable_atr_initial_stop = true
+enable_hard_cap = true
+enable_stall_exit = true
+enable_structure_stop = true
+enable_winprob_observe = true
+enable_spike_stop = true
+enable_history_recovery = true
+# Issue 2.5 (2026-06-07): re-arm the loss-cutting block ONCE when a graduated
+# trade craters into a real loss (current pnl <= -graduation_crater_loss_pct),
+# restoring the tightening cap the one-way graduation latch otherwise removes.
+# A climbing winner never craters, so none is cut; one-shot prevents whipsaw.
+# Default OFF pending live observation — set true to enable.
+graduation_crater_rearm_enabled = false
+graduation_crater_loss_pct = 0.5
+# Phase 3 — volatility-based entry sizing. NOT IMPLEMENTED. Operator decision
+# 2026-05-31: keep the brain-authoritative sizing intact and bound loss via the
+# percent-of-notional cap below instead of shrinking positions. This flag is
+# reserved (no code reads it); leave false. Re-opening it would compose a
+# vol-sized ceiling on top of brain sizing — see the plan's Phase 3 note.
+volatility_entry_sizing_enabled = false
+
+# The sacred hard cap = min(dollar_ceiling, pct_of_notional). Operator decision
+# 2026-05-31: the PERCENT-of-notional is the normal binding constraint (a sane,
+# non-strangling stop that scales with position size and keeps the brain's
+# sizing intact), and the dollar ceiling only bounds the CATASTROPHIC worst case
+# on a very large position. The percent tightens inward with age; the ceiling is
+# fixed and never loosens. With ceiling $75 + percent 2.5%->1%: a $1000 position
+# caps at $25 (2.5%) young / $10 (1%) old; a $3000 position at $75 (2.5%) /
+# $30 (1%); only a >$3000 position is bounded by the $75 ceiling. (A literal $5
+# ceiling was rejected — on a $1000-3000 position it is a 0.17-0.5% stop that
+# strangles, and would have required shrinking positions, undoing brain sizing.)
+cap_dollar_ceiling = 75.0
+cap_pct_of_notional_young = 2.5
+cap_pct_of_notional_old = 1.0
+# Finding N (2026-06-08) — net-aware cap. The cap distance bounds the GROSS price
+# loss; the round-trip taker fee pushes the realized NET past the ceiling (NEAR
+# gross -74.69 ~= $75 cap, but net -81.24, ~8% over). Subtract this round-trip
+# fee percent from the gross cap budget (applied to the force-close threshold AND
+# the placed cap SL) so the realized net lands at or under the ceiling. TIGHTENS
+# gross so net is bounded; never loosens. Must equal the round-trip taker fee
+# (0.055% x 2 = 0.11%); 0 = off (gross cap). PROVISIONAL.
+cap_round_trip_fee_pct = 0.11
+# When the cap distance falls inside the gateway min-distance (un-placeable as an
+# SL on high/extreme coins), enforce the cap by a coordinator force-close when
+# realized PnL reaches the cap distance, never a clamped wrong-distance SL.
+force_close_when_cap_unplaceable = true
+
+# Finding 5 (2026-06-02) — cap slippage buffer. The exchange stop is a market-
+# trigger stop that fills PAST its trigger on a fast move, so a stop placed
+# exactly at the cap distance can realize a loss just over the ceiling (one
+# breach in 314 trades). This pulls the cap-DERIVED stop trigger this percent of
+# the cap distance INSIDE the ceiling so expected slippage still lands within it.
+# Applies ONLY to stop PLACEMENT; the sacred force-close still fires at the true
+# ceiling, and the CAP_SLIPPAGE_OBSERVED sentinel logs any overshoot trend.
+# PROVISIONAL pending truthful PnL — 0.5 is a conservative starting point; a
+# fast-gap fill can still overshoot. 0 disables the buffer.
+cap_slippage_buffer_pct = 0.5
+
+# Technique 1 — ATR-based initial stop (placed the second a trade opens). Wide
+# young (breathe), tight old. Loss-owned mirror of the profit ATR multiple.
+atr_initial_multiple_young = 3.0
+atr_initial_multiple_old = 1.0
+
+# Technique 2 — time-based stall-exit with the signs-of-life veto. The stall
+# only fires past this fraction of the deadline. Young > 1 = a young trade is
+# NEVER stall-cut; old ~0.55 fires past ~55% of the deadline.
+stall_min_age_fraction_young = 1.1
+stall_min_age_fraction_old = 0.55
+# Signs of life that VETO the cut (spare a slightly-building late-bloomer):
+# a recent peak_pnl_pct rise of at least this %, OR a ticks-in-profit ratio at
+# least this high, OR pnl improving tick-over-tick.
+#
+# Finding 2 (2026-06-02) — THE VETO-AND-RECOVERY INTERACTION LEVER. This veto
+# proved generous live (it spared far more cuts than it made): some flat-faders
+# rode to a deadline close at a moderate loss (ENA -41) while the SAME lenient
+# path let the recovery trail catch others small (ATOM -6). The lever is the
+# INTERACTION of this leniency with the loss-side recovery trail
+# (recovery_bounce_trail_atr_loss_side, below). profit_ratio is nudged
+# 0.20 -> 0.25 and the loss-side recovery trail 0.5 -> 0.40, both in the same
+# tightening direction. The three-condition OR is kept intact (late-bloomer
+# protection is sacred). PROVISIONAL pending truthful PnL — watch
+# LOSS_STALL_VETO (veto_count), LOSS_STALL_VETO_BUDGET, and LOSS_RECOVERY.
+stall_signs_of_life_peak_improve_pct = 0.15
+stall_signs_of_life_profit_ratio = 0.25
+stall_signs_of_life_lookback_ticks = 24
+# PF/LC Top-15 Problem 2.1 — use a WINDOWED recent in-profit ratio (over the
+# last stall_signs_of_life_lookback_ticks ticks) for the stall "building" veto
+# instead of the cumulative lifetime ratio, so stale early-profit evidence no
+# longer keeps a dying trade alive. Same 0.25 threshold. Default false: it can
+# cut a late-bloomer, so offline-validate against history before enabling.
+stall_veto_windowed_profit_ratio_enabled = false
+# PF/LC Top-15 Problem 2.2 — require SUSTAINED improvement (current PnL at least
+# stall_signs_of_life_improving_floor_bps above the lowest of the last
+# stall_signs_of_life_improving_lookback_ticks ticks) before the "improving"
+# reprieve spares a stalling trade, instead of firing on a single noise up-tick.
+# Default false: tightening the reprieve cuts more trades, so offline-validate
+# the late-bloomer pool before enabling.
+stall_signs_of_life_sustained_improving_enabled = false
+stall_signs_of_life_improving_lookback_ticks = 3
+stall_signs_of_life_improving_floor_bps = 2.0
+# Finding 2 — observability only: emit a one-shot LOSS_STALL_VETO_BUDGET when a
+# single position has been spared this many times (~one per minute) so a
+# notably-lenient sparing is visible live. Does NOT force a cut. 0 disables.
+stall_veto_budget_warn = 8
+# Past this fraction of the deadline the stall-exit yields to the watchdog's
+# 95%-time loser timeout (so the two never race for the very-late cut).
+stall_tail_yield_fraction = 0.95
+
+# Technique 3 — structure-based stop just beyond the X-RAY invalidation level.
+# Buffer beyond invalidation, in ATR units; shrinks with age.
+structure_buffer_atr_young = 0.50
+structure_buffer_atr_old = 0.10
+
+# Technique 4 — win-probability exit (COORDINATED, not duplicated). The actual
+# p_win force-close stays in the watchdog time-decay path (the single owner; it
+# logs its own cut). This is its tuning home: when loss-cutting is enabled the
+# watchdog sources near_certain_loser_p_win from winprob_cut_threshold_young
+# (0.10 by default = the existing value, a no-op until tuned) and logs
+# LOSS_WINPROB_COORD at boot. Only _young is wired today (single static
+# threshold); _old is reserved for a future age-rising variant. The sniper adds
+# NO second cutter. Widening is a truthful-PnL tuning decision.
+winprob_cut_threshold_young = 0.10
+winprob_cut_threshold_old = 0.20
+
+# Technique 5 — volatility-spike-down catastrophe stop (time-INDEPENDENT; a
+# crash is dangerous at any age). On a violent adverse move over the window
+# (>= this many ATR units) the spike force-CLOSES the position (the fastest
+# catastrophe exit); it does not place an SL.
+spike_atr_move_mult = 2.5
+spike_window_seconds = 30.0
+# PF/LC Top-15 Problem 3.4 — opening-seconds carve-out. The spike is now
+# always-on (Problem 1.2), so a very young low-vol trade could read a modest
+# settling wiggle as a crash. For the first spike_young_opening_seconds the
+# spike needs the wider spike_atr_move_mult_opening; after that it uses the
+# normal spike_atr_move_mult. 3.8 ATR is still a genuine crash, so protection
+# stays intact.
+spike_young_opening_seconds = 12.0
+spike_atr_move_mult_opening = 3.8
+
+# Final-phase history-aware recovery (tight bounce-capture). The final phase
+# begins past this fraction of the deadline. A mostly-profit-side trade
+# (ticks-in-profit ratio at/above recovery_profit_side_ratio) gets a wider bounce
+# trail; a mostly-loss-side trade gets a tight trail that captures near least-loss.
+recovery_final_fraction = 0.80
+recovery_profit_side_ratio = 0.50
+recovery_bounce_trail_atr_profit_side = 1.5
+# Finding 2 (2026-06-02) — loss-side half of the veto-and-recovery lever. Nudged
+# 0.5 -> 0.40 so a vetoed bleeder reaching the recovery window is caught tighter
+# (more ATOM-like small catches). PROVISIONAL pending truthful PnL.
+recovery_bounce_trail_atr_loss_side = 0.40
+
+# =============================================================================
+# TIAS Phase 2 — DeepSeek Post-Trade Analysis via OpenRouter
+# =============================================================================
+[tias]
+enabled = true
+# Switched to OpenRouter free-tier models (2026-07-06, operator request) — no
+# per-call cost, but account-wide free-tier cap is 50 req/day (1000/day once
+# $10+ credits are purchased on OpenRouter), shared with [apex] below.
+primary_model = "openai/gpt-oss-120b:free"
+fallback_model = "meta-llama/llama-3.3-70b-instruct:free"
+temperature = 0.3
+max_tokens = 1500
+timeout_seconds = 45
+max_retries = 1
+analysis_version = 1
+
+# =============================================================================
+# APEX — Aggressive Profit Extraction & Exploitation (via OpenRouter)
+# =============================================================================
+[apex]
+enabled = true
+# F9 (2026-06-09) — loss-only re-entry cooldown + selection exclusion. When true,
+# a coin that takes a real loss enters a reentry_cooldown_seconds cooldown during
+# which it is held OUT of the Call-A candidate list (a fresh coin takes the slot)
+# and re-entry is blocked at the gate; it reappears exactly when the cooldown
+# expires. Wins/scratches get no cooldown. Ships OFF; enable after offline
+# validation against the DOGE re-churn.
+loss_cooldown_enabled = true
+# Fix 8 (re-churn cooldown calibration, 2026-06-10) — sized on the losing-window
+# replay. The apex loss-only re-entry cooldown defaulted to 300s, but RUNE's 11
+# consecutive same-direction loss re-entries were 604-1511s apart, so a 300s
+# cooldown blocked ~0 of them — toothless against the prolonged-downtrend
+# re-churn. A flat 1200s blocks 10 of RUNE's 11 in-window re-entries (every gap
+# under 1200s) while the operator keeps the FLAT design (no escalation curve).
+# Loss-only: a win sets no cooldown, so a profitable coin is never held out. A
+# losing coin is excluded from the Call-A candidate list for 1200s; its slot goes
+# to a fresh candidate (trading redistributes, it does not reduce).
+reentry_cooldown_seconds = 1200
+# Switched to OpenRouter free-tier models (2026-07-06, operator request) — see
+# [tias] above for the shared account-wide free-tier rate-limit note.
+model = "openai/gpt-oss-120b:free"
+fallback_model = "meta-llama/llama-3.3-70b-instruct:free"
+# Layer 3: was 30s; DeepSeek frequently responds at 30-32s causing APEX_TIMEOUT.
+timeout_seconds = 60
+max_tokens = 800
+temperature = 0.2
+# Brain-Authoritative Sizing (2026-05-31): the brain does intelligent fund
+# management against ONE source of truth — tiered_capital. It is shown open-trade
+# count + used/usable/available MARGIN + per-trade margin budget + coin prices, and
+# sizes each trade so its MARGIN (size_usd / leverage) is about usable/max_positions
+# so the whole book of max_positions fits usable capital, built over the ~5-min
+# cycles. Under the flag the gate's CHECK 4 enforces exactly that per-trade MARGIN
+# ceiling (leverage-aware: notional = margin x leverage), and CHECK 1 / the venue
+# cap become EQUITY-TRACKING absolute backstops = usable x max_leverage (so a fixed
+# value never clips a legitimate per-trade-margin trade as the account grows). The
+# value below is only the FALLBACK absolute max used when tiered/equity is briefly
+# unavailable. Hard rails still bind (CHECK 3 concurrency = tiered max_positions,
+# CHECK 4 per-trade margin + in-cycle book guard, CHECK 5 duplicate, exchange
+# min/max). Set max back to 1200 + brain_authoritative_sizing_enabled=false to revert.
+max_position_size_usd = 4000
+max_leverage = 5
+min_tias_trades_for_optimization = 3
+# When true the downstream HONORS the brain's size_usd (APEX won't shrink below it;
+# gate CHECK 4 becomes the per-trade MARGIN ceiling = usable/max_positions,
+# leverage-aware, NOT a conviction shrink). Instant revert: set false (restores
+# today's exact behaviour).
+brain_authoritative_sizing_enabled = true
+# FALLBACK-ONLY per-trade ceiling as a fraction of available capital, used by gate
+# CHECK 4 ONLY when tiered_capital/equity is unavailable (the live path instead caps
+# per-trade MARGIN at usable/max_positions). 0.40 of available is a safe degrade.
+brain_auth_per_trade_pct_of_available = 0.40
+min_regime_trades_for_fallback = 10
+
+# Issue B fix (2026-05-08) — bounded retry on transient OpenRouter
+# failures. Pre-fix every "OpenRouter response has no choices" /
+# empty-content / non-JSON body fired immediately fell back to
+# Claude's directive ("NO RETRY" architectural note in
+# qwen_client.py:7-9). The 13:00–16:00 UTC 2026-05-08 audit showed 4
+# such failures clustered in 16 minutes — textbook transient
+# upstream wobble that a single retry would have likely smoothed.
+# ``apex_max_attempts = 2`` means: 1 initial call + at most 1 retry.
+# ``apex_retry_backoff_seconds = 0.7`` is the sleep between attempts.
+# Set ``apex_max_attempts = 1`` to restore pre-fix no-retry behaviour.
+# After retry exhaustion (or on a non-retryable error like HTTP
+# non-200, timeout, or connection error) the existing fallback path
+# fires — ``APEX failure NEVER blocks a trade`` is preserved.
+apex_max_attempts = 2
+apex_retry_backoff_seconds = 0.7
+
+# Guardrails
+min_tp_pct = 0.3
+gate_tp_floor_enabled = true
+gate_trail_activation_floor_pct_of_tp = 15.0
+gate_trail_distance_floor_pct = 40.0
+gate_mode_override_enabled = true
+gate_confidence_floor = 0.50
+# Hard size-cap: APEX/conviction inflation cannot exceed 1.5× Claude's
+# pre-APEX directive size. Gate CHECK 0 enforces this and logs
+# CONVICTION_SIZE_CAP when it binds. Set 0 to disable.
+gate_apex_size_cap_mult = 1.5
+
+# Conviction Allocator
+conviction_enabled = true
+conviction_min_trades = 3
+
+# APEX Direction-Flip Switch (IMPLEMENT_APEX_FLIP_SWITCH, 2026-05-25).
+# Master on/off for APEX's ability to REVERSE the brain's direction.
+# false = the brain's direction executes and APEX still optimizes
+# stop/target/size/leverage for it (operator default, set to begin
+# measuring the flip-off effect; symmetric with the X-RAY switch which is
+# also off); true = pre-switch behavior (APEX may reverse direction).
+# Does NOT affect APEX's optimization, the model prompt, or the win-rate
+# queries. Boot sentinel APEX_FLIP_SWITCH_SENTINEL reports the state.
+apex_dir_flip_enabled = false
+# Issue 2.3 (2026-06-07): APEX leverage-override kill-switch, symmetric with the
+# flip switch. false (default) = APEX may NOT raise leverage above the brain's
+# directed leverage (the brain's leverage stands; SL/TP/size optimization is
+# preserved); true = pre-switch behavior (APEX leverage stands). Boot sentinel
+# APEX_LEVERAGE_OVERRIDE_SENTINEL reports the state.
+apex_leverage_override_enabled = false
+# Five-Fix Follow-Up — Fix 5 (2026-06-10): APEX size-override kill-switch,
+# symmetric with the flip and leverage switches above. The optimizer LLM
+# proposes its OWN size and the J5 dynamic-sizing adopted it, so the executed
+# size could land up to gate_apex_size_cap_mult times the brain's deliberate
+# size_usd (proven live: brain 700 dollars, executed 1050). false (default,
+# operator decision 2026-06-10) = the brain's parsed size flows UNMODIFIED to
+# the order and the gate's A+ ceiling boost is inert; every safety validation
+# (gate CHECK 0/1/2/4/5, breadth-brake, enforcer, exchange minimum) stays in
+# force. true = pre-switch sizing behaviour, byte-identical. Boot sentinel
+# BOOT_APEX_SIZE_OVERRIDE reports the state. The leverage x2/x3/x5 effect on
+# position notional is the brain's OWN chosen leverage (margin times
+# leverage) and is not touched by this switch.
+apex_size_override_enabled = false
+
+# Issue E18 (2026-05-27): A+ size-boost confidence floor (gate CHECK 4).
+# Withholds the +20% A+ size boost when X-RAY structural confidence is below
+# gate_a_plus_conf_floor, so a high score with no structural confidence is
+# never upsized. 0.70 enables the guard (matches the structural-ladder
+# baseline at gate.py); set 0.0 to restore the always-boost behaviour.
+# Sizing-only — never blocks a trade; the boost still fires on confident A+.
+gate_a_plus_score_threshold = 80.0
+gate_a_plus_size_mult = 1.20
+gate_a_plus_conf_floor = 0.70
+
+# Issue E17 (2026-05-27): structureless-but-scored reject (gate CHECK 4).
+# Rejects ONLY when X-RAY structural confidence <= conf_floor AND setup_score
+# >= score_min — the score/confidence contradiction. score_min 65 sits just
+# above #7's matched-weak B-cap (64), so this catches the leak band #7
+# guarantees is impossible for legitimately-weak coins, and a real aggressive
+# entry (which always has confidence above 0.05) is never touched. Belt-and-
+# suspenders behind #7; set conf_floor=0.0 and score_min=999 to disable.
+gate_structureless_conf_floor = 0.05
+gate_structureless_score_min = 65.0
+
+# Entry-quality filters (win-rate enhancement, 2026-07-07). Per-leg entry
+# minimums from ENTRIES_QUALITY_DIAGNOSIS.md — each leg individually flipped
+# the audited 395-trade June 17-18 window positive (signal_conf >= 0.50:
+# 45% win +$5.10; xray_conf >= 0.40: 53% win +$2.90; ADX >= 25: 48% win
+# +$3.40). All three are ONE-WINDOW hypotheses: the gate logs every reject
+# (GATE_REJECT reason=entry_quality_*) AND every pass
+# (GATE_ENTRY_QUALITY_PASS) with the raw values, so after ~300 GLM-era
+# trades each leg can be validated or killed independently against realized
+# PnL. A leg with UNKNOWN input (-1.0 sentinel from layer_manager, package/
+# block missing) fails OPEN. Rollback: set enabled = false (or zero any
+# single leg's min to disable just that leg).
+entry_quality_filters_enabled = true
+entry_quality_signal_conf_min = 0.50
+entry_quality_xray_conf_min = 0.40
+entry_quality_adx_min = 25.0
+
+# Issue 7 (2026-06-08) — portfolio directional-drawdown breaker. Halts NEW
+# same-direction entries once the open book is over-concentrated in that
+# direction AND the aggregate open (unrealized) loss across that direction's
+# positions exceeds open_loss_pct of equity. Never closes runners; only halts the
+# over-concentrated direction. Default OFF — one session can't size the
+# threshold; review more correlated-drawdown data, then set enabled=true.
+#   min_positions: a real book must exist before it can fire.
+#   concentration: long/short skew (0-1) that counts as one-directional.
+#   open_loss_pct: aggregate same-direction open loss as % of equity to halt.
+portfolio_dd_breaker_enabled = false
+portfolio_dd_breaker_min_positions = 3
+portfolio_dd_breaker_concentration = 0.80
+portfolio_dd_breaker_open_loss_pct = 1.5
+
+# H4 (2026-05-16) — reentry learning gate calibration. Phase 1
+# evidence (dev_notes/four_high_fixes/h4_phase1_rejection_trace.md)
+# showed 31 of 54 directives blocked by the J6 same-conditions gate
+# over a 5h baseline — 26 % cited losses > 16 h old (DYDXUSDT cited a
+# 60-hour-old loss), 26 % cited losses under $2 (ARBUSDT $-0.04,
+# AVAXUSDT $-1.03, SKRUSDT $-1.57), and 71 % traced to a single
+# 2-second exit-cohort event whose context had drifted by the time of
+# the next re-entry. These three escapes preserve the gate's original
+# protective intent (block genuinely-fresh + meaningful + same-context
+# revenge re-entries) while removing the over-blocking pattern.
+#
+#   reentry_learning_gate_lookback_hours: recency clamp. Prior losses
+#     older than this window do not block. 0 = no clamp (legacy).
+#     6.0 = balanced (the typical session-to-session drift window).
+#   reentry_learning_gate_min_loss_usd: magnitude floor. Prior losses
+#     with |pnl_usd| at-or-below this value do not block. 0 = no floor.
+#     5.0 = above taker-fee + slippage noise but below typical R losses.
+#   reentry_learning_gate_price_drift_pct: price-drift escape. When the
+#     current price has moved from the prior thesis's entry_price by
+#     at least this percent, re-entry is allowed even on same conditions.
+#     0 = no escape. 1.5 = a ~1.5 % move is operationally meaningful in
+#     crypto futures over a 10-30 min cycle.
+#
+# Aim-bias verdict (operator-confirmed 2026-05-16 plan session): each
+# escape RAISES trade frequency and PRESERVES aggression. Reject rate
+# expected to drop from 57.4 % to under 25 %.
+reentry_learning_gate_lookback_hours = 6.0
+reentry_learning_gate_min_loss_usd = 5.0
+reentry_learning_gate_price_drift_pct = 1.5
+
+# Definitive-fix Phase 9 (2026-04-28) — flip discipline.
+# Forensic S3 captured an APEX flip Sell→Buy that produced
+# simultaneous long-BTC + short-ETH despite a bearish brain thesis on
+# both. The legacy direction-lock was strict in trending and
+# volatile-without-evidence regimes but unconstrained in
+# ranging/dead/unknown. These two knobs close the loophole:
+#   apex_min_flip_confidence: confidence floor (0..1) for any flip in
+#     ranging / dead / unknown. DeepSeek's reported confidence MUST
+#     clear this; below it, the flip is reverted by the existing
+#     APEX_DIR_LOCK_OVERRIDE machinery. 0.90 is intentionally high —
+#     "either you're very sure, or you don't get to flip".
+#   apex_block_flip_resize: when true, a flip cannot UPSIZE the
+#     position above Claude's original. Smaller Qwen sizing on a flip
+#     is ALLOWED (de-risks lower-conviction flips). Setting to false
+#     disables both the upsize cap and the downsize allowance — full
+#     Qwen size wins. Semantic narrowed in Post-Execution Closure Fix
+#     Phase 2 (2026-05-05); the prior "one change per directive" rule
+#     forced flipped trades to full-conviction sizing despite a
+#     lower-conviction direction change.
+# Phase 3 of dir-block-fix (2026-05-05): lowered 0.90 → 0.70 so
+# moderately-confident flips backed by strong RR can pass. All four
+# 2026-05-05 24-h APEX_FLIP_BLOCKED events had Qwen confidence 0.85,
+# just below the prior 0.90 floor — pure threshold churn.
+apex_min_flip_confidence = 0.70
+apex_block_flip_resize = true
+# Phase 3 of dir-block-fix (2026-05-05): RR-weighted boost applied
+# inside _enforce_flip_confidence. When the flipped direction's
+# structural R:R is ≥ apex_flip_rr_boost_threshold × the chosen
+# direction's R:R, the effective confidence used by the gate is
+# raw_confidence + apex_flip_rr_boost_amount. Gate-local; does not
+# propagate downstream.
+apex_flip_rr_boost_threshold = 3.0
+apex_flip_rr_boost_amount = 0.15
+
+# PRIMARY Sell-Bias Fix (2026-05-11) — asymmetric flip thresholds.
+# The 2026-05-11 investigation surfaced that Buy→Sell flips destroy win
+# rate (shadow: -16.1 pp; bybit_demo: -6.8 pp) while Sell→Buy flips help
+# mildly (shadow: +10.4 pp). Per-pair thresholds let the operator tighten
+# the harmful side without losing the helpful side. Resolution order in
+# _enforce_flip_confidence (src/apex/optimizer.py): direction-pair-specific
+# floor wins; falls back to apex_min_flip_confidence above. RR-boost still
+# applies on top. See dev_notes/sell_bias_fixes/p_phase1_flip_performance.md.
+#
+# Phase 1B symmetric realignment (2026-05-19) — both directions now use
+# the same threshold (0.70) which equals the global apex_min_flip_confidence
+# floor at config.toml:1533. Was asymmetric: buy_to_sell=0.95 (harder to
+# flip Buy out), sell_to_buy=0.70 (easier to flip into Buy) = Buy-favoring
+# tilt. Per operator directive: per-coin scenarios decide direction, not
+# hardcoded directional thresholds. Phase 2B collapses these two fields
+# to a single non-directional apex_min_flip_confidence. To revert: set
+# buy_to_sell back to 0.95 + restart.
+apex_min_flip_confidence_buy_to_sell = 0.70
+apex_min_flip_confidence_sell_to_buy = 0.70
+
+# PRIMARY Sell-Bias Fix (2026-05-11) — insufficient-data flip gate.
+# Code-enforced rule: block a direction flip when the flipped direction
+# has fewer than N trades in the current regime for this symbol. Closes
+# the feedback loop where prior Sell-biased flips inflate Sell history
+# and license further Sell flips. Set 0 to disable.
+# E27 (2026-05-28): raised 5 -> 8 to demand a more durable sample before
+# a flip is licensed. This is the AUTHORITATIVE, binding gate (it reverts
+# any flip below N regardless of what DeepSeek proposes). The DeepSeek
+# system-prompt advisory still says "fewer than 5" (a softer hint); the
+# code gate is stricter and wins, so the prompt wording was left untouched
+# to avoid a live-prompt change. Latent today: this gate is only reached
+# under was_flipped, and direction flips are disabled
+# (apex_dir_flip_enabled=false), so raising it has no live effect now.
+apex_min_trades_for_flip = 8
+
+# Phase 1A neutralization (2026-05-19) — disable GAMMA R4 portfolio
+# direction concentration cap. Per operator directive: hardcoded
+# thresholds (70% concentration, 2.0x opposite-RR, min 3 positions)
+# violate the design principle "sell and buy should both work
+# according to the best scenarios, not hardcoded saying if sell this
+# much then buy this much." Setting enabled=false makes the cap a
+# no-op without removing the code (deprecate-then-delete pattern).
+# Phase 2 (deferred 48-72h pending trial) removes the gate.py:649-810
+# block and the 5 dataclass fields entirely. To revert: set this line
+# back to true OR delete the line + restart trading-workers and
+# trading-mcp-sse. See dev_notes/dirbias_validation/phase0_neutralization_baseline.md.
+portfolio_direction_cap_enabled = false
+
+# PRIMARY Sell-Bias Fix (2026-05-11) — counter-trade respect.
+# The scanner emits COUNTER_TRADE_LONG / COUNTER_TRADE_SHORT secondary
+# labels (91 events in the 2026-05-11 9-h window) and brain takes them
+# as deliberate contrarian Buys / Sells. Pre-fix, APEX would then often
+# flip these back to the structural direction, destroying the operator-
+# designed contrarian alpha. When true, APEX cannot flip direction on
+# trades whose package.structural_data.setup_type contains "counter"
+# (case-insensitive). XRAY (downstream in strategy_worker) is NOT
+# affected by this flag — its flip path is governed by
+# settings.risk.xray_dir_flip_threshold_ratio.
+apex_respect_counter_trade = true
+
+# Per-class TP cap multiplier (× recommended_tp_pct from volatility profiler).
+# Applied after DeepSeek responds; clamps absurd TPs back to class-appropriate
+# room. Dead coins cap near 1.4× base (~0.42-0.70%); extreme coins stretch to
+# 2.0× (~10%, then hard 5% ceiling kicks in). See optimizer.py APEX_TP_CAP log.
+# Phase 5 of dir-block-fix (2026-05-05): raised every class so Qwen
+# can recommend larger TPs when supported by structure. The hard 5 %
+# ceiling enforced inside optimize() prevents wild outliers regardless
+# of class multiplier.
+[apex.tp_cap_multiplier_by_class]
+dead = 1.4
+low = 1.5
+medium = 1.6
+high = 1.8
+extreme = 2.0
+
+# =============================================================================
+# SENTINEL — Exit Firewall + Smart Deadline + Portfolio Advisor
+# =============================================================================
+[sentinel]
+enabled = true
+
+# Part 1: Exit Firewall — blocks strategic review from closing positions
+firewall_enabled = true
+
+# Part 2: Deadline Engine — tiered expiry logic based on PnL
+deadline_profit_pct = 0.5
+deadline_breakeven_lower_pct = -0.3
+deadline_small_loss_pct = -1.5
+deadline_grace_minutes = 5.0
+deadline_small_loss_sl_pct = 0.5
+
+# Part 3: Portfolio Advisor — DeepSeek V3 risk assessment every 5 min
+advisor_enabled = true
+advisor_interval_seconds = 300
+advisor_model = "deepseek/deepseek-chat-v3-0324"
+advisor_temperature = 0.2
+advisor_max_tokens = 800
+advisor_timeout_seconds = 30
+# TRADE LIBERATION: Min profit before allowing stop tightening (%)
+advisor_min_profit_for_tighten_pct = 0.50
+
+# =============================================================================
+# X-RAY — Structural Market Intelligence Engine
+# =============================================================================
+# Detects support/resistance, market structure (BOS/CHoCH), structural SL/TP.
+# Runs as a background worker refreshing structural analysis per coin.
+
+[analysis.structure]
+enabled = true
+worker_interval_seconds = 60
+cache_ttl_seconds = 300
+min_candles = 50
+swing_lookbacks = [3, 5, 10]
+cluster_pct = 0.3
+min_touches = 2
+# Issue 1 of 2026-05-19 direction-bias fix Phase C — symmetric
+# resistance touch filter. Legacy behavior at
+# src/analysis/structure/support_resistance.py:126 hardcoded `>= 1`
+# for resistance while support uses min_touches=2. In sustained
+# downtrending markets, the asymmetry filtered out single-touch swing
+# lows but kept single-touch swing highs, producing sup=0 res=5 in
+# 80.7% of audited XRAY_ANALYZE rows. The result was rr_long
+# collapse → cascading Buy → Sell flips at execution. Default 2
+# symmetrizes with support. Operator may lower to 1 for markets
+# where single-touch resistance detection is desired.
+min_touches_resistance = 2
+# Issue 1 of 2026-05-19 direction-bias fix Phase C — minimum-edge
+# floor on structural_tp distance from current_price. Consumed by
+# _calc_long at structural_levels.py:97-145 and _calc_short at
+# :155-215. When the nearest resistance/support is closer to
+# current_price than tp_min_distance_pct, the structural_tp is
+# clamped to be at least this far away and StructuralPlacement's
+# is_structurally_invalid flag is set so downstream consumers can
+# qualify their handling. Prevents rr_long (or rr_short) from
+# collapsing toward zero when price is at or near a level. Default
+# 0.5% — well below the typical SL distance of 1-2% so legitimate
+# tight setups still register but pathological collapses are clamped.
+tp_min_distance_pct = 0.5
+max_levels_per_side = 5
+ms_swing_lookback = 5
+ms_min_swing_points = 3
+sl_buffer_pct = 0.15
+tp_buffer_pct = 0.10
+min_rr_ratio = 2.0
+sl_fallback_pct = 2.0
+tp_fallback_pct = 4.0
+# RR/direction-conflict fix Phase 2 (2026-05-31). When ON, an X-RAY setup whose
+# trend-implied direction has materially worse reward-to-risk than the opposite
+# VALID side is re-pointed to the better-RR side (setup_type/trade_direction/
+# label/placement follow). Default OFF — enable for a live trial. ratio = the
+# opposite/chosen RR multiple required to trigger (matches the prompt's ">=2x").
+rr_aware_direction_enabled = false
+rr_aware_direction_ratio = 2.0
+# Direction-reconcile fix (2026-06-04, Problem 8) — NEUTRAL source fix. When ON,
+# an X-RAY setup whose trend-implied direction has materially worse reward-to-risk
+# than the opposite VALID side ABSTAINS (trade_direction cleared, grade capped to
+# C/<=49) instead of asserting an A+ score-100 short into a falling-knife bottom.
+# Stops the upstream contamination that made the prompt RR-rule and the P1/P6 gate
+# fight (F25/F34) and prevents the long-bias flip (F11) — the brain then decides
+# from the coin's own evidence and the regime/WR/APEX backstops judge it. Keep
+# rr_aware_direction_enabled OFF while this is ON (they are mutually exclusive).
+# ratio = opposite/chosen RR multiple required to abstain (matches the ">= 2x" rule).
+xray_abstain_on_invalid_rr_enabled = false
+xray_abstain_rr_ratio = 2.0
+# F33 (2026-06-05) — confluence-paradox PRESENTATION. When the X-RAY structurally-
+# implied side is the worse, roomless reward-to-risk side (its own RR below
+# confluence_veto_rr_floor) while the better side leads by >= confluence_veto_ratio,
+# the candidate block prints an explicit NOTE that the confluent direction is vetoed
+# for no room. Clarity/observability only; the RR veto decision is unchanged.
+confluence_veto_note_enabled = true
+confluence_veto_rr_floor = 1.0
+confluence_veto_ratio = 2.0
+# Fix2 (2026-06-05) — with-trend continuation TP. In a confirmed trend, a valid
+# (not min-edge-clamped) WITH-TREND structural TP whose reward sits closer than
+# continuation_tp_min_atr_mult x H1-ATR reads as 'no reward room' (RR<1) and the
+# brain skips the profitable with-trend short/long — the artifact that suppressed
+# with-trend volume. The TP is re-anchored to an ATR-projected continuation
+# target (continuation_tp_atr_mult x ATR) further in the trend direction, taking
+# only the FURTHER price (never closer). Pure ATR projection, bounded; trend-side
+# only; ranging/counter-trend/ATR<=0/already-clamped untouched. Default ON; set
+# xray_continuation_tp_enabled=false to revert.
+xray_continuation_tp_enabled = true
+continuation_tp_min_atr_mult = 1.5
+continuation_tp_atr_mult = 2.5
+# Issue 3 (CALL_A exploit/fetch, 2026-06-05) — directional-RR setup scoring. The
+# X-RAY setup score graded reward-to-risk off rr_ratio = rr_best = max(long, short),
+# so a spent downtrend short (rr_short ~0.1) scored A+/100 on the LONG side's RR and
+# bypassed the <0.5 -> SKIP cap. The scorer now grades the CHOSEN direction's RR
+# (rr_short for a short, rr_long for a long); rr_ratio = rr_best stays intact for the
+# prompt display, APEX and scanner ranking. That correction is a bug fix (always on).
+# range_no_room_penalty additionally docks a setup whose range geometry is spent — a
+# short at pos <= range_floor_threshold (no room below) or a long at
+# pos >= 1 - range_floor_threshold (no room above). Symmetric. Tuning starting
+# points; set range_no_room_penalty = 0 to disable just the range component.
+range_floor_threshold = 0.05
+range_no_room_penalty = 25
+# Four-Element Prompt Recalibration, Element 3 (2026-06-11) — range-truth
+# render gate. The engine now stores the pre-clamp truth (range_breakout,
+# range_overshoot_pct as a percent of the broken boundary's price) beside the
+# clamped position_in_range (which is unchanged for every scorer/label/SLTP
+# consumer). When true, the brain-facing lines append the marker — e.g.
+# "range_pos=0.00 (BELOW RANGE by 2.3% — breakdown, not a floor)" — so a
+# breakdown can never again read as a floor invitation (June-11 DYDX: 0.00 on
+# all 24 submissions while price fell THROUGH the range). Set false to restore
+# the prior BRAIN-facing prompt bytes exactly; the fields keep computing either
+# way, and the advisory APEX structural block keeps its truthful marker (it is
+# keyed off field presence, not this flag — see the Element 3 report).
+range_truth_enabled = true
+# Issue 3 (structure confluence, 2026-06-06) — graded SMC confluence. The legacy
+# scorer added FLAT lumps on a binary present/absent test (FVG 25, OB 30, liquidity
+# 15, sweep 30), so ~81% of coins landed on the same smc_confluence = 70 (the
+# "structure confluence constant" the operator observed). It now scales each
+# component within [0, its weight] by that coin's own zone quality — proximity to
+# price plus the zone's strength / freshness — so the score spreads per coin and
+# feeds true relative quality into the setup_score SMC bonus and the prompt. The
+# four weights are the per-component maxima (same caps and same 0-100 ceiling as
+# before, so the >=70 / >=40 / >=20 SMC bonus thresholds stay calibrated); the
+# proximity windows mirror the old binary thresholds; sweep recency is the candle
+# window over which a sweep's contribution decays. Tuning starting points.
+smc_weight_fvg = 25.0
+smc_weight_ob = 30.0
+smc_weight_liq = 15.0
+smc_weight_sweep = 30.0
+smc_fvg_proximity_pct = 2.0
+smc_ob_proximity_pct = 3.0
+smc_sweep_recency_candles = 20
+# Issue 2 (X-RAY de-saturation, 2026-06-06) — the setup_score's additive modifiers
+# summed past the 0-100 ceiling for any decent setup, so the clamp pinned the
+# majority of coins at exactly 100 (grade A+ only, the middle of the range empty,
+# zero coins at A or C). modifier_scale compresses the NET modifier around the
+# neutral base 50: relative ordering is preserved exactly, but the score gains
+# headroom so strong setups land near the top, typical ones mid-range, weak ones
+# low — the grades now spread across A+/A/B/C and the coin filter ranks on real
+# relative quality. 1.0 = pre-fix overflow; lower = more spread. The grade
+# thresholds are unchanged values, centralized for tuning. The spent-short
+# directional de-grading (hard caps) runs after this and is NOT affected.
+setup_score_modifier_scale = 0.5
+setup_grade_a_plus_min = 80
+setup_grade_a_min = 65
+setup_grade_b_min = 50
+setup_grade_c_min = 35
+# Phase 2: Smart Money Concepts
+fvg_min_gap_pct = 0.1
+fvg_max_age_candles = 50
+ob_displacement_min = 0.6
+ob_max_age_candles = 50
+liq_equal_tolerance_pct = 0.05
+liq_min_equal_count = 2
+liq_round_number_step = 100.0
+sweep_max_age_candles = 10
+sweep_min_wick_pct = 0.3
+# Phase 1c (2026-05-05): XRAY confidence reachability fix. Bounds the
+# ``_check_swept`` scan to a recency window AND requires the canonical
+# sweep+reclaim pattern. Pre-fix the unbounded historical scan marked
+# nearly every zone swept (any wick over ~200 bars), capping SMC
+# confluence at 55/100 (FVG=25 + OB=30 only). Post-fix, zones whose
+# violations are stale (>30 bars) or whose violation has no later
+# reclaim within the window stay unswept, restoring the +15 liquidity
+# and +30 sweep contributions when warranted.
+#
+# sweep_recency_bars: lookback window for the violation+reclaim scan.
+# Default 30 (3× sweep_max_age_candles).
+#
+# sweep_require_reclaim: when true, requires a later bar that closes
+# back through the level. When false, falls back to wick-only
+# detection within the recency window. Default true.
+sweep_recency_bars = 30
+sweep_require_reclaim = true
+# Phase 4: Intelligence
+setup_scanner_mode = "supplement"
+# Layer 1 universe alignment (Phase 6 cleanup): structure_worker now
+# reads scanner.get_active_universe() directly — CoinDiscovery, the
+# scan_full_market gate, and coin_refresh_interval are removed.
+#
+# Definitive-fix Phase 1 (2026-04-28): batch_size raised 25 → 50 so the
+# whole watch_list (50 coins) is re-analyzed every tick. Forensic
+# C.1.4 measured ~580 ms per 25-coin tick; 50 coins ≈ 1.2 s — still
+# safely under the 5-min sweet-spot window — and resolves the prior
+# half-universe-stale problem that left ScannerWorker rejecting 25 of
+# 50 coins per cycle with `fail_no_xray`. StructureCache TTL=300 s now
+# matches the 5-min sweep cadence exactly. Tick latency must stay
+# under 4 s; XRAY_CACHE_HEALTH carries `tick_el_ms` so regressions are
+# visible.
+batch_size = 50
+shadow_db_path = "../shadow/data/shadow.db"
+
+# Issue #5 (2026-05-31) — wire higher timeframes (H4 + Daily) into the X-RAY
+# MTF confluence scorer. Default false: behaviour is byte-for-byte today's
+# H1-only MTF. Daily klines are already fetched hourly by kline_worker but were
+# consumed by nothing downstream; enabling this lets the structure worker also
+# read H4 + D1, compute a cheap direction-only structural view per TF (cached to
+# each TF's kline cooldown), and blend a BOUNDED cross-timeframe agreement signal
+# into the existing 0-10 MTF score (+/- mtf_htf_weight). This MTF score gates
+# setup classification, scanner ranking, and the brain prompt, so enabling it
+# requires an operator restart + trial. Watch XRAY_TICK_SUMMARY el_ms and the
+# MTF score / XRAY_CLASSIFY_SUMMARY distribution; instant rollback = set false +
+# restart. The XRAY_MTF_MULTI_TF_INIT log confirms the flag is live.
+mtf_multi_timeframe_enabled = false
+mtf_timeframes = ["240", "D"]    # higher TFs beyond H1 ("240"=H4, "D"=Daily)
+mtf_h4_cache_ttl_seconds = 300   # aligns to kline H4 fetch cooldown
+mtf_d1_cache_ttl_seconds = 3600  # aligns to kline D1 fetch cooldown (~hourly)
+mtf_htf_weight = 0.25            # alpha — bounds HTF influence to +/-25% of score
+mtf_htf_limit = 120              # candles fetched per higher timeframe
+
+# Layer 1 restructure Phase 2 — categorical setup classification
+# thresholds. Conservative defaults; relax via Phase 9 observation.
+#
+# Definitive-fix Phase 2 (2026-04-28): fvg_ob_min_confluence 0.7 → 0.5.
+# Forensic C.1.3 showed legitimate FVG+OB confluence rejected at
+# mtf_score=0.40-0.65 because the 0.70 gate is unrealistic outside
+# strongly trending markets. 0.50 means "more than half of the higher
+# timeframes align" — still a confluence requirement, just achievable
+# in normal conditions. classify_setup() reads this verbatim from
+# config (structure_engine.py:701); no code change required.
+[analysis.structure.setup_types]
+fvg_ob_min_confluence = 0.5
+# XRAY counter-setup Phase 6 (Lever B) — relaxed from true to false on
+# 2026-04-30. Pre-fix BULLISH/BEARISH_STRUCTURAL_BREAK required
+# last_bos.significance == "major", which rejected the 5 BoS-only coins
+# observed in the live forensic (XRPUSDT, PLUMEUSDT, EGLDUSDT,
+# ALICEUSDT, SANDUSDT — all classified NONE because of minor BoS).
+# Minor BoS still represents in-direction structure (less confirmed
+# than major), so it now fires with confidence reduced by
+# structural_break_minor_confidence_multiplier (0.8) to reflect the
+# weaker confirmation. Major BoS confidence is unchanged.
+structural_break_require_retest = false
+structural_break_minor_confidence_multiplier = 0.8
+sweep_min_displacement_pct = 0.5
+range_breakout_min_compression_bars = 20
+mtf_alignment_required = true
+# Definitive-fix Phase 3 (2026-04-28): alignment helpers now accept
+# ``ranging`` market structure when mtf_score_01 clears this threshold,
+# so a clean FVG+OB confluence in a ranging market with HTF backing
+# can classify as BULLISH/BEARISH_FVG_OB instead of NONE. Volatile and
+# strict cross-direction (long+downtrend / short+uptrend) still reject.
+ranging_market_mtf_threshold = 0.55
+# Issue 6 (2026-06-08) — FVG-OB-in-ranging down-weight. The fair-value-gap
+# order-block setup in a ranging regime at low confidence was the single largest
+# loss driver (all 7 win-prob cuts, ~ -$240, both directions). Multiply the
+# FVG-OB confidence by this discount when the regime is ranging so it scores
+# lower (selected less by the rank-only funnel) and sizes smaller (size scales
+# with confidence, floored at 0.5). A down-weighting, NOT a gate or exclusion.
+# Must be in (0, 1]; 1.0 = off (no discount).
+fvg_ob_ranging_confidence_discount = 0.75
+
+# XRAY counter-setup Phase 2 (2026-04-30): ATR-scaled distance windows
+# for the _find_nearest_fvg/ob proximity check. The pre-fix fixed
+# percentages (2.0% FVG, 3.0% OB) gave low-vol coins (BTC at 0.42% ATR)
+# a 4.8-ATR window — too loose — and high-vol coins (DYDX at 1.30% ATR)
+# a 1.5-ATR window — too tight. New formula:
+#   window_pct = max(min_distance_pct, atr_multiplier * atr_pct_h1)
+# atr_pct_h1 is computed inline by StructureEngine._compute_h1_natr_pct
+# from the H1 candles already in hand (no dep on volatility_profile).
+# The floor (min_distance_pct) keeps very-low-vol coins from getting
+# near-zero windows when ATR collapses.
+fvg_atr_multiplier = 3.0
+ob_atr_multiplier = 4.0
+fvg_min_distance_pct = 2.0
+ob_min_distance_pct = 3.0
+
+# XRAY counter-setup Phase 4 (2026-04-30): counter-direction setup
+# variants fire when the suggested direction's in-direction zones are
+# missing but the OPPOSITE direction has tradeable FVG+OB structure
+# near price. Confidence is reduced (× counter_confidence_multiplier)
+# so downstream consumers (TradeScorer Quality, opportunity_score
+# struct_norm, ensemble size_mult) downweight counter setups vs
+# in-direction ones. Lower counter_mtf_threshold than fvg_ob_min
+# (0.40 vs 0.50) since counter setups are already lower-conviction —
+# don't double-penalize on MTF. counter_alignment_strict=true tightens
+# the structure gate to {opposite-direction-trend, ranging} only.
+counter_setup_enabled = true
+# Issue 2 Concern 7 (2026-05-19): config-only test of removing the
+# ×0.7 multiplier. Set to 1.0 for the 48h Phase A trial. Producer at
+# src/analysis/structure/structure_engine.py:1188, 1210 then becomes a
+# no-op multiply, and the 4 downstream floor-0.5 multipliers in
+# scorer.py:494 / ensemble.py:158 / scanner_worker.py:288 / apex/gate.py:218
+# see un-cut counter confidence — eliminates the ~3.88× compounding
+# suppression on counter-LONG setups that the 14-day WR data flagged as
+# selecting Buys from a low-conviction sub-pool. Reversible in seconds
+# via `git checkout config.toml && restart`. Decision matrix at
+# dev_notes/dirbias_validation/MASTER_REPORT.md determines whether to
+# ratify with code removal (Option 7.2) after the 48h trial. Original
+# value 0.7 was set in commit 3a59637 (2026-04-30, XRAY counter-setup
+# Phase 4) as an unempirical heuristic, no backtest, no tuning since.
+counter_confidence_multiplier = 1.0
+counter_mtf_threshold = 0.40
+counter_alignment_strict = false
+
+[analysis.volatility_profile]
+enabled = true
+# Phase 5 (P0-4 DB Contention): TTL 120 s + per-symbol jitter window of
+# +/- 30 s spreads expirations across a full 60 s window. With 30 coins
+# and uniform hash distribution that's ~1 expiration every 2 s instead
+# of 30 in a single second. Eliminates the thundering-herd recompute
+# storm that pegged WD_TICK_SLOW > 5 s.
+cache_ttl_seconds = 120.0
+jitter_range_seconds = 30
+dead_threshold = 0.05
+low_threshold = 0.15
+medium_threshold = 0.40
+high_threshold = 1.00
+min_tp_pct = 0.30
+min_sl_pct = 0.20
+max_tp_pct = 8.0
+max_sl_pct = 5.0
+
+# =============================================================================
+# Time-Decay Loser-Lane SL (5-model institutional exit intelligence)
+# =============================================================================
+# Runs inside PositionWatchdog only when pnl_pct < 0. Combined formula:
+#   allowed = atr_room × time_factor × recovery × momentum × probability
+#   allowed = max(allowed, min_allowed_loss_pct)  # 0.15% floor
+#   allowed = min(allowed, original_sl_pct)       # never widen SL
+# Force-closes when p_win < p_win_force_close. Propagates tighter-only SL
+# via _push_sl_to_shadow (source="time_decay"). All scalar defaults come
+# from TimeDecaySettings in settings.py; per-class overrides below.
+[time_decay]
+enabled = true
+
+# Issue 3 (2026-06-08) — recovery-responsive tightening. The MAE monotonic hold
+# pins the stop at the worst excursion's wide budget through a genuine recovery.
+# When the trade has recovered past mae_tightening_recovery_threshold (fraction
+# of its worst MAE), tighten the stop toward the recovered level (a tight
+# bounce-capture near the least loss) leaving recovery_tightening_buffer_pct
+# below current price so a still-running recovery is not cut. High threshold so a
+# moderate recovery still gets room. enabled=false = off-switch.
+mae_recovery_tighten_enabled = true
+mae_tightening_recovery_threshold = 0.75
+recovery_tightening_buffer_pct = 0.3
+
+# Phase 1 (Time-Decay Force-Close Definitive Fix, 2026-05-06) —
+# minimum-age guardrail for force-close. Stricter than per-class grace
+# (30-240 s). Suppresses BOTH the force-close sentinel and the tighter-SL
+# push when position age is below this value. Mirrors
+# `watchdog.strategic_action_min_hold_seconds = 300` so the time-decay
+# path is held to the same 5-minute settling contract as CALL_B closes
+# (the existing minimum-hold guardrail at position_watchdog:2410 covers
+# CALL_B but does NOT cover the time-decay close path which bypasses
+# _execute_strategic_actions and calls position_service.close_position()
+# directly). Set to 0 to disable.
+min_age_seconds = 300
+
+# Phase 2 (Time-Decay Force-Close Definitive Fix, 2026-05-06) —
+# MAE-relative-to-SL gate for force-close. Suppresses force-close (and
+# tighter-SL push) when the position's worst drawdown to date has not
+# reached this fraction of its original SL distance. At 0.5 (default),
+# a position must lose at least half of its original SL allocation
+# before time-decay can fire. Below that, the trade is still in
+# normal-development territory — killing it captures noise rather than
+# real failure. Phase 0 baseline: 33/33 force-closes in the 12h window
+# fired at MAE/SL ratio < 0.36, all of which Phase 2 would suppress.
+# Set to 0 to disable.
+mae_to_sl_ratio_threshold = 0.5
+
+# Phase 3 (Time-Decay Force-Close Definitive Fix, 2026-05-06) —
+# structural-invalidation gate. Force-close fires only when there's
+# real evidence of structural failure: XRAY confidence drop >=
+# `xray_drop_threshold` from entry, OR setup-type drift, OR regime
+# inverted at >= `regime_inversion_confidence_threshold`. Watchdog
+# computes the boolean per-tick from `structure_cache` and
+# `regime_detector`; cache-miss is fail-safe block. The watchdog seeds
+# entry-time anchors on TimeDecayState at first-loser-tick from
+# TradeCoordinator.TradeState (preferred) or `trade_thesis` v27 columns
+# (fallback after watchdog restart for in-flight positions). Set
+# `structural_invalidation_required = false` to disable the gate
+# (preserves pre-fix p_win-only behaviour for back-compat / debugging).
+structural_invalidation_required = true
+# Issue 2.6 (2026-06-07): slow-bleed cumulative-drawdown force-close. When a
+# trade is statistically dead (p_win < p_win_force_close) AND has bled past this
+# cumulative loss, the structural-invalidation guard yields so the force-close
+# fires — catches the slow structureless grind the guard otherwise holds to the
+# plain stop. A recovering winner carries a higher p_win, so this band is a
+# clear loser, not a winner. Default OFF pending the offline check; set true to enable.
+slow_bleed_cumulative_force_close_enabled = false
+slow_bleed_cumulative_loss_pct = 2.5
+# F4/F4b/F7 (2026-06-09): standalone monotonic-grind force-close — the DOGE-grind
+# lever. A p_win-INDEPENDENT cut for a trade that has STALLED at its worst
+# excursion for a sustained run with no bounce (monotonic_grind_sustained_ticks
+# consecutive ticks pinned within monotonic_grind_near_trough_band_pct of its
+# running MAE) and crossed monotonic_grind_min_loss_pct. This is the dying slow
+# grind the mae_to_sl_ratio_threshold (0.50) gate never reaches on a low-vol coin
+# (its drawdown stays under half the SL distance, so the trade rides to its stop).
+# Fires AFTER the min-age guard and BEFORE the MAE-to-SL gate. Does NOT read p_win.
+# DEFAULT OFF. Offline-validated on the 2026-06-08 DOGE-vs-BLUR tape: net +$10.99,
+# ZERO strangles (every recovering dip spared). The thresholds are deliberately
+# conservative — catching every grinder is impossible without strangling a
+# recoverer at these loss depths, so they catch only the cleanest grinds. Set
+# monotonic_grind_cut_enabled = true to enable (only after live observation).
+monotonic_grind_cut_enabled = true
+monotonic_grind_near_trough_band_pct = 0.05
+monotonic_grind_sustained_ticks = 24
+monotonic_grind_max_recovery_ratio = 0.20
+monotonic_grind_min_loss_pct = 0.30
+# H1 (Neutrality + Exit-System Fix, 2026-05-30) — near-certain-loser carve-out.
+# When p_win is at/below this, the structural-invalidation guard above YIELDS so
+# the force-close fires and a clear bleeder is CUT instead of held until it stops
+# out. Scoped strictly to this band (positions with higher p_win keep the guard);
+# the -3% hard stop, loser timeout, SENTINEL tiers and 2.5% safety stop are
+# unchanged, and healthy positions are never aggressively tightened. Must be
+# <= p_win_force_close (0.15) to take effect. Set to 0.0 to disable the carve-out.
+near_certain_loser_p_win = 0.10
+# PF/LC Top-15 Problem 2.3 — age-aware near-certain-loser band. When enabled,
+# the carve-out yields at near_certain_loser_p_win_old once the trade is older
+# than age_threshold_to_raise_p_win_seconds (so an aged near-certain loser in
+# the band is cut), and at near_certain_loser_p_win_young when still young. Both
+# must stay <= p_win_force_close (0.15). Default false (the single
+# near_certain_loser_p_win above is used); offline-validate before enabling.
+winprob_age_aware_band_enabled = false
+near_certain_loser_p_win_young = 0.10
+near_certain_loser_p_win_old = 0.13
+age_threshold_to_raise_p_win_seconds = 600.0
+xray_drop_threshold = 0.40
+regime_inversion_confidence_threshold = 0.60
+
+# Absolute-PnL-depth penalty on Bayesian p_win update. Catches slow bleeders
+# whose tick-over-tick deepening stays <1 ATR (so the ATR-relative penalty
+# never fires). At |pnl| > 1.5% a mild 0.90 multiplier applies per tick the
+# loss deepens; at |pnl| > 3.0% a strong 0.70 multiplier applies.
+p_win_abs_depth_threshold_pct = 1.5
+p_win_abs_depth_strong_pct = 3.0
+p_win_abs_depth_penalty = 0.90
+p_win_abs_depth_strong_penalty = 0.70
+
+# PF/LC Top-15 Problem 3.1 — win-probability over-cut smoothing (the biggest
+# controllable exit lever). Master switch off by default (behaviour unchanged).
+# When true: the regime penalty applies only after a SUSTAINED mismatch
+# (p_win_regime_penalty_sustained_ticks consecutive ticks), so a single 10s
+# regime flicker no longer halves p_win; and a recovery guard holds the
+# force-close while the trade is within p_win_recovery_guard_be_band_pct of
+# breakeven AND making a new local high over p_win_recovery_guard_n_ticks ticks
+# (unless there is real structural invalidation). Offline-validate before
+# enabling. Do not remove the exit; this only smooths it.
+smooth_p_win_enabled = false
+p_win_regime_edge_trigger_enabled = true
+p_win_regime_penalty_sustained_ticks = 3
+p_win_recovery_guard_enabled = true
+p_win_recovery_guard_be_band_pct = 0.5
+p_win_recovery_guard_n_ticks = 3
+
+# Per-class grace window (seconds before Time-Decay can act on a new loser).
+# Slow bleeders (dead/low) act sooner — the whole point of the fix.
+# Fast movers get more settling room so normal bar noise doesn't force exit.
+[time_decay.grace_seconds_by_class]
+dead = 30
+low = 45
+medium = 120
+high = 180
+extreme = 240
+
+# Per-class ATR room multiplier (Model 2 — base atr_room = atr × mult).
+# Dead coins stay tight (1.0×); extreme coins get 3.0× so huge-ATR swings
+# don't trigger premature exits. `min_allowed_loss_pct = 0.15%` floor still
+# applies post-combine so SL never goes below floor.
+[time_decay.atr_room_multiplier_by_class]
+dead = 1.0
+low = 1.2
+medium = 2.0
+high = 2.5
+extreme = 3.0
+
+
+# ─── Layer 1 restructure Phase 1: observability ─────────────────────
+# Standardized log-tag and cycle-tracker knobs. The defaults match
+# blueprint Section 14 — 100-cycle in-memory history (≈8h at 5-min
+# cadence), hourly flush to cycle_metrics, tick markers at INFO.
+[observability]
+cycle_tracker_history = 100
+cycle_metrics_flush_seconds = 3600
+log_tick_done_at_info = true
+
+# System 1 (observability) — complete Call-A and Call-B brain prompt-and-
+# response capture. capture_brain_calls is the centralized gate (the legacy
+# data/stage2_dumps/.enabled sentinel file remains an optional live override).
+# Each brain call writes one JSON record (full prompt, system prompt, response,
+# call type, call id, decision id, timestamp) to capture_dir. The hourly
+# cleanup worker prunes capture_dir/*.json older than capture_retention_days
+# and caps the directory at capture_max_files. Dedicated files only — never the
+# trading database or a protected table.
+capture_brain_calls = true
+capture_dir = "data/stage2_dumps"
+capture_retention_days = 7
+capture_max_files = 5000
+
+# System 2 (observability) — per-second open-trade price path logger. A
+# standalone background task samples each open trade's price about once per
+# second by reading the already-running in-memory WebSocket quote cache (zero
+# new exchange API calls), buffers in memory, and batch-flushes to the
+# dedicated rotated price_path.log so the exit calibration can replay
+# arm/lock/trail settings against the real intrabar price path. A WS quote
+# older than price_path_ws_max_age_seconds is treated as a gap, not a point.
+# price_path_rotation/retention are reserved for a future explicit-sink
+# override; the routed price_path.log inherits the global 10 MB / 7 days.
+price_path_logging_enabled = true
+price_path_resolution_seconds = 1.0
+price_path_flush_seconds = 30
+price_path_ws_max_age_seconds = 5.0
+price_path_rotation = "10 MB"
+price_path_retention = "7 days"
+price_path_filename = "price_path.log"
+
+# ─── Phase 2 (post-Layer-1 fix): LayerManager safety knobs ────────────
+# lm_attach_deadline_sec — hard deadline (seconds since OrderService
+#   init) before the gate flips to fail-close for ALL purposes when
+#   layer_manager is still None. Layer 4 close/SL normally bypass during
+#   the bootstrap window so a watchdog close can still execute, but
+#   exceeding the deadline implies attachment failure (LayerManager
+#   never constructed) — at that point even Layer 4 cannot be allowed.
+#   Default 60 s comfortably covers the observed boot ordering window
+#   (≤ 5 s in production).
+# state_sync_interval_sec — disk/memory layer state sync heartbeat
+#   cadence. Every interval the LayerManager reads data/layer_state.json
+#   and compares to layer_active in memory; a mismatch triggers a
+#   recovery action (see [layer_manager.state_sync] below). Default 60 s
+#   — fine for catching drift within one Strategy/Scanner cycle.
+# state_sync.on_drift_action — Phase 11 (dead-workers fix). What the
+#   heartbeat does when disk and memory disagree.
+#     "rewrite_disk" (default, post-fix): memory wins. Re-persist
+#       memory to disk; emit LAYER_STATE_DRIFT_RECOVERED. Correct
+#       semantics — persist failures should be RECOVERED by re-
+#       attempting persist, not by undoing the in-memory state.
+#     "reload_memory" (legacy, pre-fix): disk wins. Overwrite memory
+#       from disk; emit LAYER_STATE_DRIFT. This is the exact behaviour
+#       that produced the Layer 3 toggle revert regression observed
+#       on 2026-04-27 — only set this for emergency rollback.
+[layer_manager]
+lm_attach_deadline_sec = 60.0
+state_sync_interval_sec = 60.0
+
+[layer_manager.state_sync]
+on_drift_action = "rewrite_disk"
+
+# ── SignalGenerator multi-source classification (Phase 1 output-quality) ─────
+# Pre-fix, _evaluate_signal() used sentiment as a HARD gate: every BUY/SELL
+# rule required abs(sentiment) > 0.2. With sentiment=0.0 in 97.9% of coins
+# (Reddit disabled, Finnhub no altcoin coverage, aggregator.py:165 zero-coverage
+# rule), all signals fell through to NEUTRAL by design.
+# Post-fix evaluator computes a weighted direction_score across 4 components
+# (sentiment, F&G contrarian, funding rate, OI change). Each component is
+# "active" only if abs(score) >= its min threshold; INACTIVE components are
+# dropped (don't pull toward NEUTRAL). A coin with sentiment=0.0 but F&G=15
+# and funding=-0.012 will now correctly classify BUY via F&G+funding alone.
+# Definitive-fix Phase 5 (2026-04-28) — calibration to break the 100 %
+# NEUTRAL distribution observed in forensic C.2.4. The multi-source
+# weighted classifier (signal_generator._evaluate_signal) and the
+# Phase-29 confidence gate are correct architecturally; the issue is
+# threshold tightness vs. the actual input availability:
+#   - funding_min_active 0.20 → 0.10 — funding rates rarely have
+#     |rate|/0.005 ≥ 0.20 (i.e. |rate| ≥ 0.001 = 0.1%) in normal
+#     markets; 0.10 (= |rate| ≥ 0.05%) admits more coins to the
+#     weighted sum.
+#   - oi_min_active 0.20 → 0.10 — same rationale for OI delta.
+#   - buy_threshold 0.25 → 0.18 — the lowered "active" thresholds bring
+#     more components into the renormalised sum, but a 0.25 gate still
+#     demands strong agreement; 0.18 is a more realistic gate given the
+#     typical direction-score magnitude observed in forensic SIG_CLASSIFY
+#     lines (most BUY-leaning coins land in 0.18-0.30 range).
+# strong_threshold stays 0.55 so the STRONG label keeps its meaning;
+# only the BUY/SELL gate relaxes.
+[signal_generator.multi_source]
+sentiment_min_active = 0.05
+fg_min_active = 0.10
+funding_min_active = 0.10
+oi_min_active = 0.10
+sentiment_weight = 0.40
+fg_weight = 0.25
+funding_weight = 0.20
+oi_weight = 0.15
+strong_threshold = 0.55
+buy_threshold = 0.18
+fg_normalize_range = 30.0
+funding_normalize = 0.005
+oi_normalize_pct = 5.0
+# Issue 1 (2026-06-08) — Fear-and-Greed direction neutrality. The contrarian
+# F&G term ((50 - fg)/fg_normalize_range, large positive on extreme fear) was
+# pinning the classifier to ~100% buy (the structural root of the one-directional
+# contrarian-long book), contradicting the prompt-layer F&G-neutral work. When
+# true, F&G contributes NOTHING to DIRECTION (direction comes from the coin's own
+# funding/OI/sentiment); F&G still informs the confidence magnitude. NEUTRALITY,
+# not a flip. Offline replay: 100% buy -> 32% buy / 51% sell / 17% neutral.
+# false = restore the prior contrarian-buy behaviour (off-switch).
+fg_direction_neutral = true
+# Fix 1 (price-conditioned OI, 2026-06-10) — the OI direction component is
+# conditioned on the same-window price move. Rising OI on a FALLING price is
+# shorts piling in (BEARISH continuation), not longs accumulating (bullish); the
+# pre-fix code mapped any rising OI to bullish, manufacturing buy signals on
+# coins grinding down (the proven RUNE wrong-side root). The sign is inverted
+# only when OI change and price change have OPPOSITE signs; magnitude is
+# preserved. This is a formula correction, not a short bias — the result is
+# two-sided per each coin's own price.
+# oi_price_window_hours: the price window matched to the OI change window (both
+#   ~24h today, so the two halves of the condition describe the same move).
+# oi_price_dead_band_pct: minimum absolute price move (percent) required before
+#   the conditioning inverts; 0.0 = invert on any opposite-sign move.
+oi_price_window_hours = 24.0
+oi_price_dead_band_pct = 0.0
+# Fix 2 (fresh signal inputs, 2026-06-10) — the signal read ONLY the ~24h OI
+# delta, which on alt coins is often saturated (KAT pinned at +126% for many
+# cycles) and barely moves intra-session, so the signal froze for half an hour
+# at a time while the market turned. This blends a fresh SHORT OI window (the
+# repo already computes change_1h_pct) with the 24h confirmation. The blend is
+# on the per-window PRICE-CONDITIONED, NORMALIZED scores (not raw percents), so
+# the saturated 24h delta does not drown the fresh short window — and the signal
+# moves with the recent market. oi_short_window_hours also sets the matching
+# price-change window read from 5-minute klines. To replay the prior 24h-only
+# behaviour (A/B baseline / revert), set oi_blend_weight_short = 0.0 and
+# oi_blend_weight_long = 1.0. Funding stays the live instantaneous rate.
+oi_short_window_hours = 1.0
+oi_blend_weight_short = 0.6
+oi_blend_weight_long = 0.0
+funding_use_instantaneous = true
+# Five-Fix Follow-Up — Fix 2 (2026-06-10): the 15-minute window joins the 1h
+# window as the DIRECTIONAL DRIVERS (operator-approved weights 15m=0.4,
+# 1h=0.6); the 24h read becomes CONTEXT-ONLY (weight 0.0 — still computed,
+# shown to the brain as oi_change_24h_pct and logged, just not steering
+# direction). Each window is price-conditioned against its own matching kline
+# window before the blend, so the Fix-1 pairing measures both halves of the
+# bullish-or-bearish condition over the SAME move. If neither short window has
+# usable data the blend falls back to the 24h conditioned score at full
+# strength. Revert levers: 15m=0.0/short=0.7/long=0.3 restores the previous
+# 1h+24h blend; 15m=0.0/short=0.0/long=1.0 restores the original 24h-only read.
+oi_15m_window_hours = 0.25
+oi_blend_weight_15m = 0.4
+
+# ── CoinPackage validator (Phase 5 output-quality) ──────────────────
+# Validates each CoinPackage produced by ScannerWorker before it lands
+# in layer_manager._coin_packages (which Stage 2 reads). Packages with
+# completeness < fail_below are QUARANTINED (not included). warn_below
+# packages still flow but are flagged in the per-package log.
+# Score formula: (sum_required + 0.5*sum_optional) / (count_required +
+# 0.5*count_optional). See src/core/coin_package_validator.py docstring
+# for the full rule list.
+[coin_package_validator]
+fail_below = 0.50
+warn_below = 0.85
+staleness_fail_seconds = 300.0
+
+# ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
+# Watchdog probes the per-worker liveness tracker every interval and
+# emits WORKER_NEVER_TICKED / WORKER_TICK_OVERDUE warnings when a
+# worker has registered but produced no first tick within the grace
+# window, or has gone quiet for overdue_multiplier × expected_interval
+# after its first tick. WORKER_LIVENESS_HEARTBEAT INFO log fires every
+# tick regardless so workers.log has a continuous trail.
+#
+# Cycle-gate aware: cycle_gated workers (1B/1C/1D) that haven't ticked
+# while LayerManager.is_cycle_active() is False are NOT alarmed —
+# they're intentionally silent. Without this awareness the watchdog
+# would false-alarm on the 5 cycle_gated workers every L3=OFF window.
+[worker_liveness]
+watchdog_interval_sec = 30
+first_tick_grace_sec = 90
+overdue_multiplier = 2.0
+alert_rate_limit_sec = 3600
+

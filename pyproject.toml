@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "trading-intelligence-mcp"
+version = "0.1.0"
+description = "Enterprise-grade Crypto Trading Intelligence MCP Server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    # MCP Protocol
+    "mcp>=1.0.0",
+    # Async HTTP
+    "aiohttp>=3.9.0",
+    # Bybit SDK
+    "pybit>=5.6.0",
+    # News & Data
+    "finnhub-python>=2.4.0",
+    # Reddit
+    "asyncpraw>=7.7.0",
+    # Database
+    "aiosqlite>=0.19.0",
+    # Config
+    "tomli>=2.0.0;python_version<'3.11'",
+    "python-dotenv>=1.0.0",
+    # Logging
+    "loguru>=0.7.0",
+    # Numeric (lightweight, no pandas)
+    "numpy>=1.26.0",
+    # Telegram
+    "python-telegram-bot>=20.0",
+    # Claude API
+    "anthropic>=0.25.0",
+    # SSE transport
+    "starlette>=0.36.0",
+    "uvicorn>=0.27.0",
+    # Utilities
+    "websockets>=12.0",
+    # System metrics for SystemHealthMonitor (memory/CPU)
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow running",
+    "stress: marks DB-concurrency stress tests (run manually, not in default CI)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true

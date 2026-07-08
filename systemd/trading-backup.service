@@ -1,0 +1,8 @@
+[Unit]
+Description=Trading Intelligence - Daily Backup
+
+[Service]
+Type=oneshot
+User=inshadaliqbal786
+WorkingDirectory=/home/inshadaliqbal786/trading-intelligence-mcp
+ExecStart=/home/inshadaliqbal786/trading-intelligence-mcp/scripts/backup.sh

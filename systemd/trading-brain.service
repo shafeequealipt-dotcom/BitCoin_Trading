@@ -1,0 +1,47 @@
+[Unit]
+Description=Trading Intelligence - Claude Brain Auto-Trading
+Documentation=https://github.com/user/trading-intelligence-mcp
+After=network-online.target trading-workers.service
+Wants=network-online.target trading-workers.service
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=inshadaliqbal786
+Group=inshadaliqbal786
+WorkingDirectory=/home/inshadaliqbal786/trading-intelligence-mcp
+
+# PATH: venv for python + standard dirs for claude CLI binary (/usr/bin/claude)
+Environment="PATH=/home/inshadaliqbal786/.local/bin:/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+# HOME: Claude CLI needs this to find ~/.claude/.credentials.json for OAuth
+Environment="HOME=/home/inshadaliqbal786"
+# LANG: Ensure UTF-8 encoding for subprocess I/O with Claude CLI
+Environment="LANG=C.UTF-8"
+
+EnvironmentFile=/home/inshadaliqbal786/trading-intelligence-mcp/.env
+ExecStart=/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python brain.py
+Restart=always
+RestartSec=30
+
+# Resource limits
+MemoryMax=200M
+MemoryHigh=150M
+CPUQuota=50%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+# data/: logs, database, state files
+ReadWritePaths=/home/inshadaliqbal786/trading-intelligence-mcp/data
+# .claude/: OAuth credential file (needed for token refresh by Claude CLI)
+ReadWritePaths=/home/inshadaliqbal786/.claude
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging — application handles its own logging to data/logs/
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,237 @@
+"""Builds analysis prompts from live database data for Claude Brain."""
+
+import hashlib
+import json
+from typing import Any
+
+from src.config.settings import Settings
+from src.core.logging import get_logger
+from src.core.types import TimeFrame
+from src.core.utils import now_utc
+from src.database.connection import DatabaseManager
+from src.database.repositories.trading_repo import TradingRepository
+from src.brain.prompts.trade_decision import TRADE_DECISION_PROMPT
+
+log = get_logger("brain")
+
+
+class PromptBuilder:
+    """Gathers market data from DB and builds prompts for Claude.
+
+    Args:
+        db: Database manager.
+        settings: Application settings.
+        services: Dict of service instances (market, account, position, ta, aggregator, etc.).
+    """
+
+    def __init__(self, db: DatabaseManager, settings: Settings, services: dict) -> None:
+        self.db = db
+        self.settings = settings
+        self._services = services
+        self.symbols = settings.bybit.default_symbols
+        self._trading_repo = TradingRepository(db)
+
+    async def build_market_context(self, symbols: list[str] | None = None) -> dict:
+        """Gather all data Claude needs for a trading decision.
+
+        Args:
+            symbols: Target symbols (defaults to configured list).
+
+        Returns:
+            Comprehensive context dict.
+        """
+        target = symbols or self.symbols
+        context: dict[str, Any] = {}
+
+        # 1. Current prices
+        context["prices"] = {}
+        market = self._services.get("market")
+        if market:
+            for sym in target:
+                try:
+                    t = await market.get_ticker(sym)
+                    context["prices"][sym] = {"price": t.last_price, "change_24h": t.change_24h_pct}
+                except Exception:
+                    pass
+
+        # 2. Technical analysis (top 3 to save tokens)
+        context["technical_analysis"] = {}
+        ta = self._services.get("ta")
+        if ta:
+            for sym in target[:3]:
+                try:
+                    result = await ta.analyze(symbol=sym, timeframe=TimeFrame.M15, limit=200)
+                    context["technical_analysis"][sym] = {
+                        "overall_signal": result.get("overall", {}),
+                        "trend": result.get("trend", {}).get("trend_summary"),
+                        "momentum": result.get("momentum", {}).get("momentum_summary"),
+                        "rsi": result.get("momentum", {}).get("rsi_14"),
+                        "macd": result.get("trend", {}).get("macd"),
+                        "patterns": result.get("patterns"),
+                        "support_resistance": result.get("support_resistance"),
+                    }
+                except Exception as e:
+                    log.debug("TA skipped for {s}: {e}", s=sym, e=str(e))
+
+        # 3. News summary
+        context["news"] = {}
+        news = self._services.get("news")
+        if news:
+            try:
+                context["news"] = await news.get_news_summary(hours=6)
+            except Exception:
+                pass
+
+        # 4. Sentiment
+        context["sentiment"] = {}
+        agg = self._services.get("aggregator")
+        if agg:
+            for sym in target[:3]:
+                try:
+                    context["sentiment"][sym] = await agg.aggregate_for_symbol(sym)
+                except Exception:
+                    pass
+
+        # 5. Fear & Greed
+        fg = self._services.get("fear_greed")
+        if fg:
+            try:
+                fgd = await fg.get_latest()
+                context["fear_greed"] = fgd.to_dict() if fgd else None
+            except Exception:
+                context["fear_greed"] = None
+        else:
+            context["fear_greed"] = None
+
+        # 6. Funding rates
+        context["funding_rates"] = {}
+        funding = self._services.get("funding")
+        if funding:
+            try:
+                rates = await funding.fetch_current_rates(target[:3])
+                context["funding_rates"] = {r.symbol: {"rate": r.funding_rate} for r in rates}
+            except Exception:
+                pass
+
+        # 7. Positions
+        context["positions"] = []
+        pos_svc = self._services.get("position")
+        if pos_svc:
+            try:
+                positions = await pos_svc.get_positions()
+                context["positions"] = [p.to_dict() for p in positions]
+            except Exception:
+                pass
+
+        # 8. Account
+        context["account"] = {}
+        acct = self._services.get("account")
+        if acct:
+            try:
+                info = await acct.get_wallet_balance()
+                context["account"] = info.to_dict()
+            except Exception:
+                pass
+
+        # 9. Risk params
+        context["risk_params"] = {
+            "max_position_size_pct": self.settings.risk.max_position_size_pct,
+            "max_daily_loss_pct": self.settings.risk.daily_loss_limit_pct,
+            "max_leverage": self.settings.risk.max_leverage,
+            "max_open_positions": self.settings.risk.max_open_positions,
+            "mandatory_stop_loss": self.settings.risk.mandatory_stop_loss,
+        }
+
+        # 10. Recent performance
+        context["recent_performance"] = await self._get_recent_performance()
+
+        return context
+
+    async def _get_recent_performance(self) -> dict:
+        """Get recent trade performance for learning context."""
+        try:
+            trades = await self._trading_repo.get_trade_history(limit=10)
+            if not trades:
+                return {"total_trades": 0, "win_rate": 0, "avg_pnl": 0}
+            wins = sum(1 for t in trades if t.pnl > 0)
+            avg_pnl = sum(t.pnl for t in trades) / len(trades)
+            return {
+                "total_trades": len(trades),
+                "win_rate": round(wins / len(trades) * 100, 1),
+                "avg_pnl": round(avg_pnl, 2),
+            }
+        except Exception:
+            return {"total_trades": 0, "win_rate": 0, "avg_pnl": 0}
+
+    def build_prompt(self, context: dict) -> str:
+        """Format the context into the trade decision prompt template.
+
+        Keeps prompt under ~3000 tokens by truncating verbose sections.
+
+        Args:
+            context: Market context from build_market_context().
+
+        Returns:
+            Formatted prompt string.
+        """
+        prices = "\n".join(
+            f"  {sym}: ${d.get('price', 0):,.2f} ({d.get('change_24h', 0):+.1f}%)"
+            for sym, d in context.get("prices", {}).items()
+        ) or "No price data"
+
+        ta_lines = []
+        for sym, d in context.get("technical_analysis", {}).items():
+            sig = d.get("overall_signal", {})
+            ta_lines.append(f"  {sym}: {sig.get('signal', 'N/A')} (score={sig.get('score', 0):.2f}) RSI={d.get('rsi', 'N/A')}")
+        ta_section = "\n".join(ta_lines) or "No TA data"
+
+        news_data = context.get("news", {})
+        news_section = f"  Articles: {news_data.get('total_articles', 0)}, Avg sentiment: {news_data.get('avg_sentiment', 0):.2f}"
+
+        sent_lines = []
+        for sym, d in context.get("sentiment", {}).items():
+            sent_lines.append(f"  {sym}: {d.get('level', 'N/A')} (score={d.get('overall_score', 0):.2f})")
+        sent_section = "\n".join(sent_lines) or "No sentiment data"
+
+        fg = context.get("fear_greed") or {}
+        fg_val = fg.get("value", 50) if isinstance(fg, dict) else 50
+        fg_class = fg.get("classification", "N/A") if isinstance(fg, dict) else "N/A"
+
+        funding_lines = []
+        for sym, d in context.get("funding_rates", {}).items():
+            funding_lines.append(f"  {sym}: {d.get('rate', 0)*100:.4f}%")
+        funding_section = "\n".join(funding_lines) or "No funding data"
+
+        positions = context.get("positions", [])
+        pos_section = "\n".join(
+            f"  {p.get('symbol', '?')} {p.get('side', '?')} size={p.get('size', 0)} PnL={p.get('unrealized_pnl', 0)}"
+            for p in positions
+        ) or "No open positions"
+
+        acct = context.get("account", {})
+        risk = context.get("risk_params", {})
+        perf = context.get("recent_performance", {})
+        perf_section = f"  Trades: {perf.get('total_trades', 0)}, Win rate: {perf.get('win_rate', 0)}%, Avg PnL: ${perf.get('avg_pnl', 0)}"
+
+        return TRADE_DECISION_PROMPT.format(
+            prices_section=prices,
+            ta_section=ta_section,
+            news_section=news_section,
+            sentiment_section=sent_section,
+            fear_greed_value=fg_val,
+            fear_greed_classification=fg_class,
+            funding_section=funding_section,
+            positions_section=pos_section,
+            equity=acct.get("total_equity", 0),
+            available_balance=acct.get("available_balance", 0),
+            unrealized_pnl=acct.get("unrealized_pnl", 0),
+            max_position_pct=risk.get("max_position_size_pct", 10),
+            max_leverage=risk.get("max_leverage", 3),
+            max_positions=risk.get("max_open_positions", 5),
+            max_daily_loss_pct=risk.get("max_daily_loss_pct", 5),
+            performance_section=perf_section,
+        )
+
+    def compute_prompt_hash(self, prompt: str) -> str:
+        """SHA256 hash of prompt for deduplication."""
+        return hashlib.sha256(prompt.encode()).hexdigest()[:16]

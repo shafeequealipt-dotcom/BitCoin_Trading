@@ -1,0 +1,48 @@
+commit fbd13deafa99fb772716e2ece1504ee4e47b99c9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:15:09 2026 +0000
+
+    fix(phase0): recover production code wrongly stashed in step 0.0
+    
+    Phase 0 step 0.0 stashed 11 modified files thinking they were stale
+    WIP. Cross-check during the post-Phase-9 audit revealed they were
+    the ACTUAL production-shipped fixes from the 2026-04-26 ShadowKlineReader
+    + five-fixes engagement that were uncommitted in the working tree.
+    Stashing them effectively reverted production to pre-fix state.
+    
+    Recovered files (production-shipped, now committed):
+    - src/analysis/structure/shadow_kline_reader.py — async aiosqlite
+      rewrite with persistent connection + asyncio.Lock + 5 read-side
+      PRAGMAs. The matching tests in tests/test_shadow_kline_reader/
+      (committed earlier in 8dca492) all pass after this restore.
+    - src/analysis/ta_cache.py — TACache improvements.
+    - src/core/urgent_queue.py — UrgentQueue fixes.
+    - src/intelligence/signals/{confidence,signal_generator}.py — signal
+      improvements.
+    - src/strategies/regime.py — regime detector fixes.
+    - tests/overhaul29_{integration,pipeline}_test.py — test updates.
+    
+    src/brain/strategist.py auto-merged my Phase 7 prepend +
+    PROMPT_BUILD_DONE additions on top of the previously-stashed
+    production-shipped strategist mods. Both layers verified present:
+    9 references to use_packages / _format_packages_for_prompt /
+    PROMPT_BUILD_DONE in the merged file. ClaudeStrategist imports
+    cleanly. All 84 phase tests + 25 shadow tests pass.
+    
+    Pre-existing test failures in test_strategies/test_scanner.py and
+    test_watchdog/test_position_watchdog.py are confirmed unrelated —
+    they fail identically on the pre-layer1-restructure tag (verified
+    by checkout-and-test pass on the tag).
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+ src/analysis/structure/shadow_kline_reader.py | 288 ++++++++++++++++++--------
+ src/analysis/ta_cache.py                      | 144 ++++++++++---
+ src/brain/strategist.py                       |  64 +++++-
+ src/core/urgent_queue.py                      |  75 ++++++-
+ src/intelligence/signals/confidence.py        |  53 +++--
+ src/intelligence/signals/signal_generator.py  | 132 +++++++++++-
+ src/strategies/regime.py                      |  13 +-
+ tests/overhaul29_integration_test.py          |  18 +-
+ tests/overhaul29_pipeline_test.py             |   8 +-
+ 9 files changed, 634 insertions(+), 161 deletions(-)

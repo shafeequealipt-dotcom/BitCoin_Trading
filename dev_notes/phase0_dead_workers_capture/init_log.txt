@@ -1,0 +1,69 @@
+2026-04-27 06:16:41.113 | INFO     | src.analysis.structure.shadow_kline_reader:close:132 | XRAY_SHADOW_CONN_CLOSE | total_calls=0 opens=1 executes=0 total_query_ms=0 | no_ctx
+2026-04-27 06:17:56.096 | INFO     | src.analysis.structure.shadow_kline_reader:connect:107 | XRAY_SHADOW_CONN_OPEN | path=../shadow/data/shadow.db mode=ro opens=1 | no_ctx
+2026-04-27 06:18:06.983 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=price_worker interval=45.0s | hid=h-price_worker
+2026-04-27 06:18:07.475 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=price_worker el_to_first_tick_ms=492 first_tick_el_ms=492 | no_ctx
+2026-04-27 06:18:07.476 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=kline_worker interval=300.0s | hid=h-kline_worker
+2026-04-27 06:18:07.477 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=news_worker interval=300.0s | hid=h-news_worker
+2026-04-27 06:18:07.477 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=altdata_worker interval=300.0s | hid=h-altdata_worker
+2026-04-27 06:18:07.480 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=signal_worker interval=300.0s | hid=h-signal_worker
+2026-04-27 06:18:07.480 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=position_watchdog interval=10.0s | hid=h-position_watchdog
+2026-04-27 06:18:07.484 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=profit_sniper interval=5.0s | hid=h-profit_sniper
+2026-04-27 06:18:07.486 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=scanner_worker interval=300.0s | hid=h-scanner_worker
+2026-04-27 06:18:07.486 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=structure_worker interval=300.0s | hid=h-structure_worker
+2026-04-27 06:18:07.487 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=regime_worker interval=300.0s | hid=h-regime_worker
+2026-04-27 06:18:07.487 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=strategy_worker interval=300.0s | hid=h-strategy_worker
+2026-04-27 06:18:07.489 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=telegram_bot_worker interval=60s | hid=h-telegram_bot_worker
+2026-04-27 06:18:07.490 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=telegram_bot_worker el_to_first_tick_ms=1 first_tick_el_ms=0 | no_ctx
+2026-04-27 06:18:07.491 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=price_alert_worker interval=10.0s | hid=h-price_alert_worker
+2026-04-27 06:18:07.491 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=scheduled_report_worker interval=300s | hid=h-scheduled_report_worker
+2026-04-27 06:18:07.492 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=enforcer_worker interval=60.0s | hid=h-enforcer_worker
+2026-04-27 06:18:07.493 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=fund_manager_worker interval=60s | hid=h-fund_manager_worker
+2026-04-27 06:18:07.495 | INFO     | src.workers.manager:_run_worker:1935 | WM_START | worker=cleanup_worker interval=3600.0s | hid=h-cleanup_worker
+2026-04-27 06:18:08.231 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=price_alert_worker el_to_first_tick_ms=740 first_tick_el_ms=740 | no_ctx
+2026-04-27 06:18:08.234 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=scheduled_report_worker el_to_first_tick_ms=742 first_tick_el_ms=742 | no_ctx
+2026-04-27 06:18:08.234 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=profit_sniper el_to_first_tick_ms=750 first_tick_el_ms=750 | no_ctx
+2026-04-27 06:18:08.239 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=enforcer_worker el_to_first_tick_ms=746 first_tick_el_ms=746 | no_ctx
+2026-04-27 06:18:08.244 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=position_watchdog el_to_first_tick_ms=764 first_tick_el_ms=764 | wid=w-1777270687481
+2026-04-27 06:18:08.278 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=fund_manager_worker el_to_first_tick_ms=785 first_tick_el_ms=784 | no_ctx
+2026-04-27 06:18:12.993 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=cleanup_worker el_to_first_tick_ms=5497 first_tick_el_ms=5497 | no_ctx
+2026-04-27 06:18:12.995 | INFO     | src.workers.base_worker:start:203 | WORKER_FIRST_TICK | name=news_worker el_to_first_tick_ms=5518 first_tick_el_ms=5518 | no_ctx
+2026-04-27 06:20:45.579 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=structure_worker el_to_first_tick_ms=158092 first_tick_el_ms=575 drift_ms=4 | no_ctx
+2026-04-27 06:20:50.515 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=kline_worker el_to_first_tick_ms=163039 first_tick_el_ms=20513 drift_ms=2 | no_ctx
+2026-04-27 06:21:00.676 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=signal_worker el_to_first_tick_ms=173196 first_tick_el_ms=675 drift_ms=1 | no_ctx
+2026-04-27 06:21:19.297 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=regime_worker el_to_first_tick_ms=191810 first_tick_el_ms=4296 drift_ms=0 | no_ctx
+2026-04-27 06:21:32.839 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=strategy_worker el_to_first_tick_ms=205352 first_tick_el_ms=2838 drift_ms=1 | sid=s-1777270890001
+2026-04-27 06:21:54.340 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=altdata_worker el_to_first_tick_ms=226860 first_tick_el_ms=9340 drift_ms=0 | no_ctx
+2026-04-27 06:24:00.021 | INFO     | src.workers.base_worker:start:497 | WORKER_FIRST_TICK | name=scanner_worker el_to_first_tick_ms=352535 first_tick_el_ms=20 drift_ms=1 | no_ctx
+2026-04-27 09:56:47.757 | INFO     | src.analysis.structure.shadow_kline_reader:close:132 | XRAY_SHADOW_CONN_CLOSE | total_calls=0 opens=1 executes=0 total_query_ms=0 | no_ctx
+2026-04-27 09:58:19.634 | INFO     | src.analysis.structure.shadow_kline_reader:connect:107 | XRAY_SHADOW_CONN_OPEN | path=../shadow/data/shadow.db mode=ro opens=1 | no_ctx
+2026-04-27 09:58:48.592 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=price_worker interval=45.0s | hid=h-price_worker
+2026-04-27 09:58:48.895 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=price_worker el_to_first_tick_ms=303 first_tick_el_ms=302 | no_ctx
+2026-04-27 09:58:48.896 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=kline_worker interval=300.0s | hid=h-kline_worker
+2026-04-27 09:58:48.896 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=news_worker interval=300.0s | hid=h-news_worker
+2026-04-27 09:58:48.897 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=altdata_worker interval=300.0s | hid=h-altdata_worker
+2026-04-27 09:58:48.898 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=signal_worker interval=300.0s | hid=h-signal_worker
+2026-04-27 09:58:48.898 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=position_watchdog interval=10.0s | hid=h-position_watchdog
+2026-04-27 09:58:48.899 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=profit_sniper interval=5.0s | hid=h-profit_sniper
+2026-04-27 09:58:48.905 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=scanner_worker interval=300.0s | hid=h-scanner_worker
+2026-04-27 09:58:48.905 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=structure_worker interval=300.0s | hid=h-structure_worker
+2026-04-27 09:58:48.906 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=regime_worker interval=300.0s | hid=h-regime_worker
+2026-04-27 09:58:48.907 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=strategy_worker interval=300.0s | hid=h-strategy_worker
+2026-04-27 09:58:48.928 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=telegram_bot_worker interval=60s | hid=h-telegram_bot_worker
+2026-04-27 09:58:48.929 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=telegram_bot_worker el_to_first_tick_ms=1 first_tick_el_ms=0 | no_ctx
+2026-04-27 09:58:48.929 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=price_alert_worker interval=10.0s | hid=h-price_alert_worker
+2026-04-27 09:58:48.930 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=scheduled_report_worker interval=300s | hid=h-scheduled_report_worker
+2026-04-27 09:58:48.931 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=enforcer_worker interval=60.0s | hid=h-enforcer_worker
+2026-04-27 09:58:48.931 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=fund_manager_worker interval=60s | hid=h-fund_manager_worker
+2026-04-27 09:58:48.934 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=fund_reconciler interval=60.0s | hid=h-fund_reconciler
+2026-04-27 09:58:48.935 | INFO     | src.workers.manager:_run_worker:2019 | WM_START | worker=cleanup_worker interval=3600.0s | hid=h-cleanup_worker
+2026-04-27 09:58:49.639 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=price_alert_worker el_to_first_tick_ms=710 first_tick_el_ms=709 | no_ctx
+2026-04-27 09:58:49.643 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=profit_sniper el_to_first_tick_ms=743 first_tick_el_ms=740 | no_ctx
+2026-04-27 09:58:49.646 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=scheduled_report_worker el_to_first_tick_ms=716 first_tick_el_ms=715 | no_ctx
+2026-04-27 09:58:49.651 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=enforcer_worker el_to_first_tick_ms=720 first_tick_el_ms=720 | no_ctx
+2026-04-27 09:58:49.654 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=position_watchdog el_to_first_tick_ms=756 first_tick_el_ms=756 | wid=w-1777283928899
+2026-04-27 09:58:49.712 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=fund_manager_worker el_to_first_tick_ms=780 first_tick_el_ms=780 | no_ctx
+2026-04-27 09:58:49.713 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=fund_reconciler el_to_first_tick_ms=779 first_tick_el_ms=778 | no_ctx
+2026-04-27 09:58:50.089 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=news_worker el_to_first_tick_ms=1192 first_tick_el_ms=1192 | no_ctx
+2026-04-27 09:58:57.523 | INFO     | src.workers.base_worker:start:213 | WORKER_FIRST_TICK | name=cleanup_worker el_to_first_tick_ms=8587 first_tick_el_ms=8587 | no_ctx
+2026-04-27 10:00:51.525 | INFO     | src.workers.base_worker:start:507 | WORKER_FIRST_TICK | name=kline_worker el_to_first_tick_ms=122629 first_tick_el_ms=21523 drift_ms=2 | no_ctx
+2026-04-27 10:01:54.219 | INFO     | src.workers.base_worker:start:507 | WORKER_FIRST_TICK | name=altdata_worker el_to_first_tick_ms=185322 first_tick_el_ms=9218 drift_ms=1 | no_ctx

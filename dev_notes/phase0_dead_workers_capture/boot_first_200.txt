@@ -1,0 +1,200 @@
+2026-04-27 01:31:00.159 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=DYDXUSDT type=neutral conf=0.26 vol_surge=0.11 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.159 | INFO     | src.workers.signal_worker:tick:110 | Signal for DYDXUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.160 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=AAVEUSDT | no_ctx
+2026-04-27 01:31:00.160 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=AAVEUSDT | no_ctx
+2026-04-27 01:31:00.166 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=AAVEUSDT type=neutral conf=0.26 vol_surge=0.47 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.167 | INFO     | src.workers.signal_worker:tick:110 | Signal for AAVEUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.167 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ICPUSDT | no_ctx
+2026-04-27 01:31:00.167 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ICPUSDT | no_ctx
+2026-04-27 01:31:00.171 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=ICPUSDT type=neutral conf=0.26 vol_surge=0.19 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.172 | INFO     | src.workers.signal_worker:tick:110 | Signal for ICPUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.172 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=IMXUSDT | no_ctx
+2026-04-27 01:31:00.172 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=IMXUSDT | no_ctx
+2026-04-27 01:31:00.175 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=IMXUSDT type=neutral conf=0.40 vol_surge=3.39 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.175 | INFO     | src.workers.signal_worker:tick:110 | Signal for IMXUSDT: neutral (confidence: 0.40)
+2026-04-27 01:31:00.175 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HBARUSDT | no_ctx
+2026-04-27 01:31:00.175 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HBARUSDT | no_ctx
+2026-04-27 01:31:00.179 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=HBARUSDT type=neutral conf=0.34 vol_surge=1.73 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.180 | INFO     | src.workers.signal_worker:tick:110 | Signal for HBARUSDT: neutral (confidence: 0.34)
+2026-04-27 01:31:00.180 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HYPEUSDT | no_ctx
+2026-04-27 01:31:00.180 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HYPEUSDT | no_ctx
+2026-04-27 01:31:00.184 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=HYPEUSDT type=neutral conf=0.26 vol_surge=0.12 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.185 | INFO     | src.workers.signal_worker:tick:110 | Signal for HYPEUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.185 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=GMTUSDT | no_ctx
+2026-04-27 01:31:00.185 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=GMTUSDT | no_ctx
+2026-04-27 01:31:00.188 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=GMTUSDT type=neutral conf=0.26 vol_surge=0.37 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.188 | INFO     | src.workers.signal_worker:tick:110 | Signal for GMTUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.188 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=FILUSDT | no_ctx
+2026-04-27 01:31:00.188 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=FILUSDT | no_ctx
+2026-04-27 01:31:00.193 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=FILUSDT type=neutral conf=0.26 vol_surge=0.22 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.193 | INFO     | src.workers.signal_worker:tick:110 | Signal for FILUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.193 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=MNTUSDT | no_ctx
+2026-04-27 01:31:00.193 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=MNTUSDT | no_ctx
+2026-04-27 01:31:00.197 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=MNTUSDT type=neutral conf=0.26 vol_surge=0.18 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.198 | INFO     | src.workers.signal_worker:tick:110 | Signal for MNTUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.198 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=MONUSDT | no_ctx
+2026-04-27 01:31:00.198 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=MONUSDT | no_ctx
+2026-04-27 01:31:00.202 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=MONUSDT type=neutral conf=0.26 vol_surge=0.29 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.202 | INFO     | src.workers.signal_worker:tick:110 | Signal for MONUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.202 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=SKRUSDT | no_ctx
+2026-04-27 01:31:00.202 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=SKRUSDT | no_ctx
+2026-04-27 01:31:00.206 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=SKRUSDT type=neutral conf=0.40 vol_surge=7.12 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.206 | INFO     | src.workers.signal_worker:tick:110 | Signal for SKRUSDT: neutral (confidence: 0.40)
+2026-04-27 01:31:00.206 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=PLUMEUSDT | no_ctx
+2026-04-27 01:31:00.207 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=PLUMEUSDT | no_ctx
+2026-04-27 01:31:00.209 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=PLUMEUSDT type=neutral conf=0.40 vol_surge=4.20 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.210 | INFO     | src.workers.signal_worker:tick:110 | Signal for PLUMEUSDT: neutral (confidence: 0.40)
+2026-04-27 01:31:00.210 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=EGLDUSDT | no_ctx
+2026-04-27 01:31:00.210 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=EGLDUSDT | no_ctx
+2026-04-27 01:31:00.214 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=EGLDUSDT type=neutral conf=0.30 vol_surge=0.70 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.214 | INFO     | src.workers.signal_worker:tick:110 | Signal for EGLDUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.214 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ALGOUSDT | no_ctx
+2026-04-27 01:31:00.214 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ALGOUSDT | no_ctx
+2026-04-27 01:31:00.218 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=ALGOUSDT type=neutral conf=0.30 vol_surge=0.89 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.218 | INFO     | src.workers.signal_worker:tick:110 | Signal for ALGOUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.219 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BSBUSDT | no_ctx
+2026-04-27 01:31:00.219 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BSBUSDT | no_ctx
+2026-04-27 01:31:00.222 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=BSBUSDT type=neutral conf=0.31 vol_surge=1.48 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.223 | INFO     | src.workers.signal_worker:tick:110 | Signal for BSBUSDT: neutral (confidence: 0.31)
+2026-04-27 01:31:00.223 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=KATUSDT | no_ctx
+2026-04-27 01:31:00.223 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=KATUSDT | no_ctx
+2026-04-27 01:31:00.229 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=KATUSDT type=neutral conf=0.30 vol_surge=0.63 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.229 | INFO     | src.workers.signal_worker:tick:110 | Signal for KATUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.229 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HYPERUSDT | no_ctx
+2026-04-27 01:31:00.230 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=HYPERUSDT | no_ctx
+2026-04-27 01:31:00.259 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=HYPERUSDT type=neutral conf=0.30 vol_surge=0.96 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.259 | INFO     | src.workers.signal_worker:tick:110 | Signal for HYPERUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.260 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ORCAUSDT | no_ctx
+2026-04-27 01:31:00.260 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ORCAUSDT | no_ctx
+2026-04-27 01:31:00.264 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=ORCAUSDT type=neutral conf=0.30 vol_surge=0.70 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.264 | INFO     | src.workers.signal_worker:tick:110 | Signal for ORCAUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.265 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BLURUSDT | no_ctx
+2026-04-27 01:31:00.265 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BLURUSDT | no_ctx
+2026-04-27 01:31:00.268 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=BLURUSDT type=neutral conf=0.31 vol_surge=0.54 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.269 | INFO     | src.workers.signal_worker:tick:110 | Signal for BLURUSDT: neutral (confidence: 0.31)
+2026-04-27 01:31:00.269 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=OPUSDT | no_ctx
+2026-04-27 01:31:00.269 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=OPUSDT | no_ctx
+2026-04-27 01:31:00.273 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=OPUSDT type=neutral conf=0.26 vol_surge=0.14 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.273 | INFO     | src.workers.signal_worker:tick:110 | Signal for OPUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.273 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=APTUSDT | no_ctx
+2026-04-27 01:31:00.273 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=APTUSDT | no_ctx
+2026-04-27 01:31:00.277 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=APTUSDT type=neutral conf=0.26 vol_surge=0.23 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.278 | INFO     | src.workers.signal_worker:tick:110 | Signal for APTUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.278 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=LTCUSDT | no_ctx
+2026-04-27 01:31:00.278 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=LTCUSDT | no_ctx
+2026-04-27 01:31:00.283 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=LTCUSDT type=neutral conf=0.26 vol_surge=0.12 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.283 | INFO     | src.workers.signal_worker:tick:110 | Signal for LTCUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.284 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BCHUSDT | no_ctx
+2026-04-27 01:31:00.284 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=BCHUSDT | no_ctx
+2026-04-27 01:31:00.286 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=BCHUSDT type=neutral conf=0.26 vol_surge=0.00 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.287 | INFO     | src.workers.signal_worker:tick:110 | Signal for BCHUSDT: neutral (confidence: 0.26)
+2026-04-27 01:31:00.287 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ALICEUSDT | no_ctx
+2026-04-27 01:31:00.287 | INFO     | src.intelligence.sentiment.aggregator:aggregate_for_symbol:70 | SENT_UNKNOWN_CACHE_HIT | sym=ALICEUSDT | no_ctx
+2026-04-27 01:31:00.290 | INFO     | src.intelligence.signals.signal_generator:generate_signal:172 | SIG_GEN | sym=ALICEUSDT type=neutral conf=0.30 vol_surge=0.79 age_h=1.52 rsn='Mixed/neutral signals (sentiment=0.00, F&G=47)' | no_ctx
+2026-04-27 01:31:00.290 | INFO     | src.workers.signal_worker:tick:110 | Signal for ALICEUSDT: neutral (confidence: 0.30)
+2026-04-27 01:31:00.291 | INFO     | src.workers.signal_worker:tick:124 | SIG_BATCH | n=50 coins=50 strongest=ATOMUSDT type=neutral conf=0.40 el=289ms drift_ms=1 | no_ctx
+2026-04-27 01:31:00.291 | INFO     | src.workers.signal_worker:tick:138 | SIG_TICK_SUMMARY | universe=50 signals=50 mean_conf=0.29 el=289ms drift_ms=1 | no_ctx
+2026-04-27 01:31:00.291 | INFO     | src.workers.signal_worker:tick:158 | SIG_BATCH_STATS | n=50 conf_min=0.263 conf_max=0.404 conf_mean=0.292 conf_std=0.043 | no_ctx
+2026-04-27 01:31:00.292 | INFO     | src.workers.base_worker:_maybe_log_heartbeat:202 | [HEARTBEAT] Worker 'signal_worker' alive | ticks=39 | errors=0 | last_tick=2026-04-27T01:31:00.292001+00:00
+2026-04-27 01:31:04.346 | INFO     | src.core.health_monitor:check:105 | SYSTEM_HEALTH | loop_lag=0.0ms tasks=28 mem=460MB cpu=9% pid=394 | no_ctx
+2026-04-27 01:31:04.653 | INFO     | src.strategies.performance_enforcer:check_and_enforce:280 | ENFORCER_STATE | trades=0 | wins=0 | losses=0 | wr=0.00 | strk=+0 | pnl=+0.00% | el=0 | sz_mult=1.00 | trigger=none | no_ctx
+2026-04-27 01:31:04.653 | INFO     | src.workers.enforcer_worker:tick:24 | ENFORCER_BEAT | total=0T W=0 L=0 wr=0.0% strk=0 hb=STALE | no_ctx
+2026-04-27 01:31:05.281 | INFO     | src.workers.position_watchdog:tick:388 | WD_TICK | mode=safety_net n=0 syms=[none] | wid=w-1777253465277
+2026-04-27 01:31:07.630 | INFO     | src.fund_manager.capital_reserves:update_pools:50 | Capital pools updated: active=879.93 aplus=251.41 emergency=125.70
+2026-04-27 01:31:07.634 | INFO     | src.fund_manager.manager:update_state:200 | FUND_POOLS | cap=1257.05 | available=1257.05 | in_use=0.00 | no_ctx
+2026-04-27 01:31:15.000 | INFO     | src.workers.sweet_spot_scheduler:wait_for_sweet_spot:227 | SWEET_SPOT_FIRED | worker=regime_worker offset=1:15 drift_ms=1 fires=39 | no_ctx
+2026-04-27 01:31:15.044 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for BTCUSDT 60: BUY (score=0.36, conf=0.60)
+2026-04-27 01:31:15.044 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=BTCUSDT rgm=trending_up conf=0.55 adx=27.5 chop=32.5 | no_ctx
+2026-04-27 01:31:15.047 | INFO     | src.workers.regime_worker:tick:144 | REGIME_GLOBAL | rgm=trending_up conf=0.55 adx=27.5 chop=32.5 drift_ms=1 | no_ctx
+2026-04-27 01:31:15.047 | INFO     | src.workers.regime_worker:tick:149 | Regime: trending_up (conf=0.55, ADX=27.5, chop=32.5)
+2026-04-27 01:31:15.094 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ETHUSDT 60: BUY (score=0.36, conf=0.60)
+2026-04-27 01:31:15.095 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ETHUSDT rgm=trending_up conf=0.76 adx=37.8 chop=28.1 | no_ctx
+2026-04-27 01:31:15.160 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for SOLUSDT 60: STRONG_BUY (score=0.55, conf=0.58)
+2026-04-27 01:31:15.161 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=SOLUSDT rgm=trending_up conf=0.55 adx=27.3 chop=37.0 | no_ctx
+2026-04-27 01:31:15.210 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for BNBUSDT 60: BUY (score=0.40, conf=0.56)
+2026-04-27 01:31:15.211 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=BNBUSDT rgm=ranging conf=0.40 adx=23.4 chop=42.6 | no_ctx
+2026-04-27 01:31:15.265 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for XRPUSDT 60: BUY (score=0.40, conf=0.60)
+2026-04-27 01:31:15.267 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=XRPUSDT rgm=ranging conf=0.40 adx=16.8 chop=50.4 | no_ctx
+2026-04-27 01:31:15.309 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ADAUSDT 60: BUY (score=0.45, conf=0.62)
+2026-04-27 01:31:15.310 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ADAUSDT rgm=ranging conf=0.40 adx=16.6 chop=48.6 | no_ctx
+2026-04-27 01:31:15.377 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for DOGEUSDT 60: STRONG_BUY (score=0.67, conf=0.62)
+2026-04-27 01:31:15.377 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=DOGEUSDT rgm=trending_up conf=0.50 adx=25.1 chop=42.1 | no_ctx
+2026-04-27 01:31:15.378 | INFO     | src.workers.position_watchdog:tick:388 | WD_TICK | mode=safety_net n=0 syms=[none] | wid=w-1777253475311
+2026-04-27 01:31:15.419 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for AVAXUSDT 60: STRONG_BUY (score=0.60, conf=0.64)
+2026-04-27 01:31:15.419 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=AVAXUSDT rgm=ranging conf=0.40 adx=21.9 chop=58.6 | no_ctx
+2026-04-27 01:31:15.480 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for LINKUSDT 60: STRONG_BUY (score=0.60, conf=0.60)
+2026-04-27 01:31:15.481 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=LINKUSDT rgm=ranging conf=0.40 adx=30.9 chop=46.1 | no_ctx
+2026-04-27 01:31:15.528 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ARBUSDT 60: BUY (score=0.24, conf=0.55)
+2026-04-27 01:31:15.529 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ARBUSDT rgm=ranging conf=0.40 adx=13.6 chop=45.2 | no_ctx
+2026-04-27 01:31:15.589 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for NEARUSDT 60: BUY (score=0.37, conf=0.58)
+2026-04-27 01:31:15.590 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=NEARUSDT rgm=ranging conf=0.40 adx=15.4 chop=48.4 | no_ctx
+2026-04-27 01:31:15.654 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ATOMUSDT 60: NEUTRAL (score=0.11, conf=0.44)
+2026-04-27 01:31:15.655 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ATOMUSDT rgm=ranging conf=0.40 adx=15.7 chop=47.4 | no_ctx
+2026-04-27 01:31:15.701 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for INJUSDT 60: BUY (score=0.43, conf=0.60)
+2026-04-27 01:31:15.702 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=INJUSDT rgm=trending_up conf=0.82 adx=41.1 chop=34.8 | no_ctx
+2026-04-27 01:31:15.764 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for RENDERUSDT 60: STRONG_BUY (score=0.72, conf=0.64)
+2026-04-27 01:31:15.765 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=RENDERUSDT rgm=trending_up conf=0.57 adx=28.5 chop=35.5 | no_ctx
+2026-04-27 01:31:15.806 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ONDOUSDT 60: BUY (score=0.41, conf=0.56)
+2026-04-27 01:31:15.806 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ONDOUSDT rgm=ranging conf=0.40 adx=31.4 chop=54.3 | no_ctx
+2026-04-27 01:31:15.867 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ENAUSDT 60: BUY (score=0.40, conf=0.60)
+2026-04-27 01:31:15.867 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ENAUSDT rgm=ranging conf=0.40 adx=17.3 chop=44.5 | no_ctx
+2026-04-27 01:31:15.921 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for PYTHUSDT 60: BUY (score=0.48, conf=0.64)
+2026-04-27 01:31:15.921 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=PYTHUSDT rgm=ranging conf=0.40 adx=12.3 chop=57.0 | no_ctx
+2026-04-27 01:31:15.982 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for SEIUSDT 60: BUY (score=0.27, conf=0.56)
+2026-04-27 01:31:15.983 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=SEIUSDT rgm=ranging conf=0.40 adx=18.2 chop=40.1 | no_ctx
+2026-04-27 01:31:16.019 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for AEROUSDT 60: BUY (score=0.31, conf=0.60)
+2026-04-27 01:31:16.019 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=AEROUSDT rgm=ranging conf=0.40 adx=40.0 chop=54.5 | no_ctx
+2026-04-27 01:31:16.087 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for RUNEUSDT 60: BUY (score=0.48, conf=0.67)
+2026-04-27 01:31:16.088 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=RUNEUSDT rgm=trending_up conf=0.76 adx=37.9 chop=32.5 | no_ctx
+2026-04-27 01:31:16.127 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for GALAUSDT 60: BUY (score=0.40, conf=0.62)
+2026-04-27 01:31:16.128 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=GALAUSDT rgm=ranging conf=0.40 adx=12.4 chop=57.6 | no_ctx
+2026-04-27 01:31:16.184 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for MANAUSDT 60: NEUTRAL (score=0.16, conf=0.45)
+2026-04-27 01:31:16.186 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=MANAUSDT rgm=ranging conf=0.84 adx=8.8 chop=66.9 | no_ctx
+2026-04-27 01:31:16.222 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for SANDUSDT 60: BUY (score=0.40, conf=0.60)
+2026-04-27 01:31:16.223 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=SANDUSDT rgm=ranging conf=0.40 adx=12.0 chop=41.1 | no_ctx
+2026-04-27 01:31:16.298 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for AXSUSDT 60: NEUTRAL (score=0.05, conf=0.43)
+2026-04-27 01:31:16.298 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=AXSUSDT rgm=volatile conf=1.00 adx=17.3 chop=34.7 | no_ctx
+2026-04-27 01:31:16.369 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for LDOUSDT 60: BUY (score=0.31, conf=0.67)
+2026-04-27 01:31:16.369 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=LDOUSDT rgm=trending_up conf=0.93 adx=46.3 chop=28.9 | no_ctx
+2026-04-27 01:31:16.421 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for CRVUSDT 60: STRONG_BUY (score=0.72, conf=0.64)
+2026-04-27 01:31:16.422 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=CRVUSDT rgm=trending_up conf=0.60 adx=29.9 chop=41.6 | no_ctx
+2026-04-27 01:31:16.486 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for DYDXUSDT 60: NEUTRAL (score=-0.05, conf=0.56)
+2026-04-27 01:31:16.486 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=DYDXUSDT rgm=ranging conf=0.82 adx=12.7 chop=65.7 | no_ctx
+2026-04-27 01:31:16.530 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for AAVEUSDT 60: STRONG_BUY (score=0.60, conf=0.64)
+2026-04-27 01:31:16.530 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=AAVEUSDT rgm=ranging conf=0.40 adx=21.8 chop=43.0 | no_ctx
+2026-04-27 01:31:16.600 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ICPUSDT 60: BUY (score=0.45, conf=0.64)
+2026-04-27 01:31:16.600 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ICPUSDT rgm=ranging conf=0.40 adx=12.1 chop=56.1 | no_ctx
+2026-04-27 01:31:16.680 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for IMXUSDT 60: NEUTRAL (score=0.08, conf=0.50)
+2026-04-27 01:31:16.680 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=IMXUSDT rgm=ranging conf=0.75 adx=10.6 chop=60.0 | no_ctx
+2026-04-27 01:31:16.733 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for HBARUSDT 60: BUY (score=0.48, conf=0.70)
+2026-04-27 01:31:16.734 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=HBARUSDT rgm=ranging conf=0.40 adx=15.6 chop=55.0 | no_ctx
+2026-04-27 01:31:16.796 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for HYPEUSDT 60: BUY (score=0.24, conf=0.55)
+2026-04-27 01:31:16.797 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=HYPEUSDT rgm=trending_up conf=0.57 adx=28.5 chop=18.9 | no_ctx
+2026-04-27 01:31:16.857 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for GMTUSDT 60: NEUTRAL (score=-0.05, conf=0.56)
+2026-04-27 01:31:16.858 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=GMTUSDT rgm=ranging conf=0.40 adx=16.2 chop=52.5 | no_ctx
+2026-04-27 01:31:16.906 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for FILUSDT 60: BUY (score=0.40, conf=0.55)
+2026-04-27 01:31:16.907 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=FILUSDT rgm=ranging conf=0.40 adx=21.1 chop=56.5 | no_ctx
+2026-04-27 01:31:16.972 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for MNTUSDT 60: BUY (score=0.48, conf=0.64)
+2026-04-27 01:31:16.973 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=MNTUSDT rgm=ranging conf=0.85 adx=11.7 chop=67.7 | no_ctx
+2026-04-27 01:31:17.018 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for MONUSDT 60: BUY (score=0.40, conf=0.64)
+2026-04-27 01:31:17.021 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=MONUSDT rgm=ranging conf=0.40 adx=24.8 chop=23.6 | no_ctx
+2026-04-27 01:31:17.079 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for SKRUSDT 60: NEUTRAL (score=-0.04, conf=0.50)
+2026-04-27 01:31:17.080 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=SKRUSDT rgm=ranging conf=0.40 adx=21.0 chop=33.8 | no_ctx
+2026-04-27 01:31:17.126 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for PLUMEUSDT 60: BUY (score=0.37, conf=0.67)
+2026-04-27 01:31:17.127 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=PLUMEUSDT rgm=volatile conf=0.78 adx=12.3 chop=46.6 | no_ctx
+2026-04-27 01:31:17.190 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for EGLDUSDT 60: STRONG_BUY (score=0.53, conf=0.60)
+2026-04-27 01:31:17.190 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=EGLDUSDT rgm=ranging conf=0.40 adx=30.5 chop=52.0 | no_ctx
+2026-04-27 01:31:17.232 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ALGOUSDT 60: STRONG_BUY (score=0.53, conf=0.60)
+2026-04-27 01:31:17.233 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ALGOUSDT rgm=ranging conf=0.40 adx=26.2 chop=48.5 | no_ctx
+2026-04-27 01:31:17.289 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for BSBUSDT 60: STRONG_BUY (score=0.61, conf=0.78)
+2026-04-27 01:31:17.291 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=BSBUSDT rgm=volatile conf=1.00 adx=15.1 chop=37.7 | no_ctx
+2026-04-27 01:31:17.358 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for KATUSDT 60: BUY (score=0.43, conf=0.56)
+2026-04-27 01:31:17.358 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=KATUSDT rgm=trending_down conf=0.78 adx=38.9 chop=39.3 | no_ctx
+2026-04-27 01:31:17.402 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for HYPERUSDT 60: NEUTRAL (score=-0.05, conf=0.56)
+2026-04-27 01:31:17.402 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=HYPERUSDT rgm=volatile conf=1.00 adx=13.4 chop=59.1 | no_ctx
+2026-04-27 01:31:17.463 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for ORCAUSDT 60: SELL (score=-0.24, conf=0.56)
+2026-04-27 01:31:17.463 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=ORCAUSDT rgm=trending_down conf=0.63 adx=31.4 chop=16.9 | no_ctx
+2026-04-27 01:31:17.503 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for BLURUSDT 60: BUY (score=0.24, conf=0.44)
+2026-04-27 01:31:17.504 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=BLURUSDT rgm=trending_down conf=1.00 adx=50.1 chop=44.6 | no_ctx
+2026-04-27 01:31:17.567 | INFO     | src.analysis.engine:analyze:138 | Analysis complete for OPUSDT 60: BUY (score=0.32, conf=0.55)
+2026-04-27 01:31:17.567 | INFO     | src.strategies.regime:detect:160 | REGIME | sym=OPUSDT rgm=ranging conf=0.40 adx=14.7 chop=56.6 | no_ctx

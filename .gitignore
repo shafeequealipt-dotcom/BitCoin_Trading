@@ -1,0 +1,81 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db.bak*
+data/*.bak-*
+data/logs/*.log
+# Claude CLI service-owned state (CLAUDE_CONFIG_DIR, 2026-06-11 wedge fix) —
+# session transcripts and OAuth-adjacent state; never commit
+data/claude-config/
+data/claude-config-mcp/
+
+# Dev notes — investigation logs and DB snapshots are large and
+# session-local. Keep markdown reports and small jsonl files; ignore
+# anything that would bloat the repo.
+dev_notes/**/*.log
+dev_notes/**/*.db
+dev_notes/**/_*.db
+dev_notes/**/*.db.bak*
+# Layer 1C full event stream — runtime jsonl, rewritten every cycle
+data/logs/layer1c_full.jsonl
+# Layer state checkpoint — runtime mutable, written every M5 boundary
+data/layer_state.json
+# Stage 2 prompt dumps — sentinel-gated diagnostics, runtime-only
+data/stage2_dumps/
+# Bybit demo restart-based switch sentinel — runtime-only state file
+# written by ExchangeSwitcher pre-restart, deleted by post-switch
+# verifier post-restart. Should never reach git.
+data/post_switch_sentinel.json
+data/post_switch_sentinel.json.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Backups
+backups/
+
+# Distribution
+*.tar.gz
+*.whl
+
+# Misplaced nested runtime log dir (wrong-cwd artifact) — never track
+data/logs/data/
+
+# Timestamped in-place edit backups (Rule 10) — never commit; git history is the backup
+*.bak_*
+*.bak2_*
+src/**/*.bak_*

@@ -1,0 +1,3 @@
+0|main|/home/inshadaliqbal786/trading-intelligence-mcp/data/trading.db
+---
+0|922|922

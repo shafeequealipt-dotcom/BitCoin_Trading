@@ -1,0 +1,42 @@
+
+Universe selection proof results.
+
+Funnel.
+Total tickers from the exchange: 585.
+Removed by the liquidity floor and exclude list before scoring: 492.
+Shortlisted into the multi-day pass: 93.
+Dropped as thin pumps above the volatility ceiling: 4.
+Coins at or above the strict directionality floor (eligible): 52.
+Coins in the softened reserve band: 28.
+Dropped below the last-resort softened floor (truly choppy): 9.
+Dropped for insufficient candle history: 0.
+Coins selected into the new universe: 50 (target 50, minimum 24).
+
+Movement comparison, the Phase 1 gate question.
+Average recent realized movement of the selected list: 9.68 percent average daily range over 7 days.
+Average recent realized movement of the current static list: 7.09 percent average daily range over 7 days.
+The selected list is 1.37 times as active as the current list.
+Of the current 50 coins, 20 would be kept and 30 would be replaced by fresher movers.
+
+Top 15 selected coins by multi-day score, with their factors.
+1. UNIUSDT. Score 0.437. Volatility 7.55 percent daily range. Directionality 0.57. Volume surge 2.33 times. Open interest expansion +7.3 percent.
+2. AEROUSDT. Score 0.436. Volatility 9.46 percent daily range. Directionality 0.52. Volume surge 2.60 times. Open interest expansion +9.4 percent.
+3. HANAUSDT. Score 0.337. Volatility 10.53 percent daily range. Directionality 0.40. Volume surge 2.90 times. Open interest expansion -21.2 percent.
+4. BSBUSDT. Score 0.331. Volatility 25.25 percent daily range. Directionality 0.39. Volume surge 2.68 times. Open interest expansion +7.3 percent.
+5. JTOUSDT. Score 0.327. Volatility 14.26 percent daily range. Directionality 0.35. Volume surge 2.60 times. Open interest expansion +26.0 percent.
+6. HYPEUSDT. Score 0.299. Volatility 9.67 percent daily range. Directionality 0.47. Volume surge 1.28 times. Open interest expansion +0.0 percent.
+7. JUPUSDT. Score 0.283. Volatility 8.78 percent daily range. Directionality 0.41. Volume surge 1.36 times. Open interest expansion +7.4 percent.
+8. SKYAI1USDT. Score 0.278. Volatility 26.34 percent daily range. Directionality 0.46. Volume surge 0.67 times. Open interest expansion -18.7 percent.
+9. AAVEUSDT. Score 0.272. Volatility 6.49 percent daily range. Directionality 0.49. Volume surge 1.59 times. Open interest expansion -8.4 percent.
+10. TIAUSDT. Score 0.271. Volatility 8.53 percent daily range. Directionality 0.40. Volume surge 1.42 times. Open interest expansion +4.5 percent.
+11. ZROUSDT. Score 0.269. Volatility 10.91 percent daily range. Directionality 0.37. Volume surge 2.04 times. Open interest expansion -9.8 percent.
+12. BRUSDT. Score 0.261. Volatility 18.33 percent daily range. Directionality 0.33. Volume surge 2.57 times. Open interest expansion -13.9 percent.
+13. WLDUSDT. Score 0.242. Volatility 15.53 percent daily range. Directionality 0.38. Volume surge 1.34 times. Open interest expansion -11.1 percent.
+14. CLUSDT. Score 0.237. Volatility 5.75 percent daily range. Directionality 0.46. Volume surge 0.71 times. Open interest expansion +17.9 percent.
+15. XPLUSDT. Score 0.227. Volatility 14.78 percent daily range. Directionality 0.38. Volume surge 0.83 times. Open interest expansion -2.6 percent.
+
+Coins added versus the current list:
+1000BONKUSDT, 1000PEPEUSDT, BRUSDT, CLUSDT, DOTUSDT, EIGENUSDT, FARTCOINUSDT, HANAUSDT, JTOUSDT, JUPUSDT, LABUSDT, LITUSDT, MEGAUSDT, PENDLEUSDT, PENGUUSDT, SENTUSDT, SHIB1000USDT, SKYAI1USDT, SUIUSDT, TAOUSDT, TIAUSDT, UNIUSDT, USELESSUSDT, VIRTUALUSDT, WIFUSDT, WLDUSDT, XLMUSDT, XPLUSDT, ZECUSDT, ZROUSDT
+
+Coins removed versus the current list:
+ADAUSDT, ALGOUSDT, ALICEUSDT, APTUSDT, AXSUSDT, BLURUSDT, BNBUSDT, BTCUSDT, CRVUSDT, DOGEUSDT, DYDXUSDT, EGLDUSDT, GALAUSDT, GMTUSDT, HBARUSDT, HYPERUSDT, ICPUSDT, IMXUSDT, INJUSDT, KATUSDT, LDOUSDT, MANAUSDT, MNTUSDT, MONUSDT, ONDOUSDT, PLUMEUSDT, PYTHUSDT, RUNEUSDT, SANDUSDT, SKRUSDT

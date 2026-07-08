@@ -1,0 +1,39 @@
+[Unit]
+Description=Shadow — Market Data Warehouse & Virtual Exchange
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=inshadaliqbal786
+Group=inshadaliqbal786
+WorkingDirectory=/home/inshadaliqbal786/shadow
+
+Environment="PATH=/home/inshadaliqbal786/shadow/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/inshadaliqbal786"
+Environment="LANG=C.UTF-8"
+
+ExecStart=/home/inshadaliqbal786/shadow/.venv/bin/python shadow.py
+Restart=always
+RestartSec=5
+
+# Resource limits — Shadow is lightweight (~50-80MB)
+MemoryMax=200M
+MemoryHigh=150M
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/inshadaliqbal786/shadow/data
+ReadWritePaths=/home/inshadaliqbal786/shadow/logs
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging — Shadow writes its own logs + stdout to journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

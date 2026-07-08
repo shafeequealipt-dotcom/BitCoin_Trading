@@ -1,0 +1,4 @@
+2026-04-27 06:18:08.224 | WARNING  | src.core.health_monitor:check:111 | EVENT_LOOP_LAG | lag=728ms (>100ms) tasks=25 — event loop congested | no_ctx
+2026-04-27 06:18:08.225 | WARNING  | src.core.health_monitor:check:122 | EVENT_LOOP_BLOCKER | lag=728ms top_tasks=[Task-26,telegram_bot_worker,structure_worker] | no_ctx
+2026-04-27 09:58:49.629 | WARNING  | src.core.health_monitor:check:111 | EVENT_LOOP_LAG | lag=692ms (>100ms) tasks=27 — event loop congested | no_ctx
+2026-04-27 09:58:49.630 | WARNING  | src.core.health_monitor:check:122 | EVENT_LOOP_BLOCKER | lag=692ms top_tasks=[Task-28,telegram_bot_worker,structure_worker] | no_ctx

@@ -1,0 +1,4 @@
+    PID    PPID     ELAPSED %CPU %MEM   RSS NLWP WCHAN  STAT CMD
+    384       1    06:58:10  7.7  1.6 65464    6 ep_pol Rsl  /home/inshadaliqbal786/shadow/.venv/bin/python shadow.py
+    396       1    06:58:10  7.7  8.3 335792  14 ep_pol Ssl  /home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python workers.py
+    397       1    06:58:10  0.4  2.5 100224   9 ep_pol Ssl  /home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python server.py --transport sse --port 8080

@@ -1,0 +1,439 @@
+Process 396: /home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python workers.py
+Python v3.11.0rc1 (/usr/bin/python3.11)
+
+Thread 396 (idle): "MainThread"
+    select (selectors.py:468)
+        Arguments:
+            self: <EpollSelector at 0x7d2c25c64c50>
+            timeout: 0.852
+        Locals:
+            max_ev: 5
+            ready: []
+    _run_once (asyncio/base_events.py:1873)
+        Arguments:
+            self: <_UnixSelectorEventLoop at 0x7d2c25c64e10>
+        Locals:
+            sched_count: 56
+            timeout: 0.8512799160016584
+            when: 25010.22919352
+    run_forever (asyncio/base_events.py:604)
+        Arguments:
+            self: <_UnixSelectorEventLoop at 0x7d2c25c64e10>
+        Locals:
+            old_agen_hooks: (None, None)
+    run_until_complete (asyncio/base_events.py:637)
+        Arguments:
+            self: <_UnixSelectorEventLoop at 0x7d2c25c64e10>
+            future: <_asyncio.Task at 0x7d2c23fb4400>
+        Locals:
+            new_task: False
+    run (asyncio/runners.py:120)
+        Arguments:
+            self: <Runner at 0x7d2c26583390>
+            coro: <coroutine at 0x7d2c23f81900>
+        Locals:
+            context: <_contextvars.Context at 0x7d2c25c47e80>
+            task: <_asyncio.Task at 0x7d2c23fb4400>
+            sigint_handler: <functools.partial at 0x7d2c23de6f20>
+    run (asyncio/runners.py:188)
+        Arguments:
+            main: <coroutine at 0x7d2c23f81900>
+        Locals:
+            debug: None
+            runner: <Runner at 0x7d2c26583390>
+    <module> (workers.py:168)
+Thread 758 (idle): "loguru-writer-1"
+    _recv (multiprocessing/connection.py:383)
+        Arguments:
+            self: <Connection at 0x7d2c23e022d0>
+            size: 4
+            read: <builtin_function_or_method at 0x7d2c2674c680>
+        Locals:
+            buf: <_io.BytesIO at 0x7d2c23e2ca40>
+            handle: 7
+            remaining: 4
+    _recv_bytes (multiprocessing/connection.py:418)
+        Arguments:
+            self: <Connection at 0x7d2c23e022d0>
+            maxsize: None
+    recv_bytes (multiprocessing/connection.py:220)
+        Arguments:
+            self: <Connection at 0x7d2c23e022d0>
+            maxlength: None
+    get (multiprocessing/queues.py:365)
+        Arguments:
+            self: <SimpleQueue at 0x7d2c23e023d0>
+    _queued_writer (loguru/_handler.py:300)
+        Arguments:
+            self: <Handler at 0x7d2c23e02590>
+        Locals:
+            message: None
+            queue: <SimpleQueue at 0x7d2c23e023d0>
+            lock: <_thread.lock at 0x7d2c23e31600>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c23e316d0>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c23e316d0>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c23e316d0>
+Thread 759 (idle): "loguru-writer-2"
+    _recv (multiprocessing/connection.py:383)
+        Arguments:
+            self: <Connection at 0x7d2c23e32310>
+            size: 4
+            read: <builtin_function_or_method at 0x7d2c2674c680>
+        Locals:
+            buf: <_io.BytesIO at 0x7d2be195e3e0>
+            handle: 10
+            remaining: 4
+    _recv_bytes (multiprocessing/connection.py:418)
+        Arguments:
+            self: <Connection at 0x7d2c23e32310>
+            maxsize: None
+    recv_bytes (multiprocessing/connection.py:220)
+        Arguments:
+            self: <Connection at 0x7d2c23e32310>
+            maxlength: None
+    get (multiprocessing/queues.py:365)
+        Arguments:
+            self: <SimpleQueue at 0x7d2c23e323d0>
+    _queued_writer (loguru/_handler.py:300)
+        Arguments:
+            self: <Handler at 0x7d2c23e31a50>
+        Locals:
+            message: "2026-04-27 16:54:44.692 | INFO     | src.core.layer_manager:_sync_state_with_disk:232 | LAYER_STATE_SYNC | match=true disk=..."
+            queue: <SimpleQueue at 0x7d2c23e323d0>
+            lock: <_thread.lock at 0x7d2c23e32a40>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c23e32b10>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c23e32b10>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c23e32b10>
+Thread 760 (idle): "loguru-writer-3"
+    _recv (multiprocessing/connection.py:383)
+        Arguments:
+            self: <Connection at 0x7d2c23e33850>
+            size: 4
+            read: <builtin_function_or_method at 0x7d2c2674c680>
+        Locals:
+            buf: <_io.BytesIO at 0x7d2be1002d40>
+            handle: 13
+            remaining: 4
+    _recv_bytes (multiprocessing/connection.py:418)
+        Arguments:
+            self: <Connection at 0x7d2c23e33850>
+            maxsize: None
+    recv_bytes (multiprocessing/connection.py:220)
+        Arguments:
+            self: <Connection at 0x7d2c23e33850>
+            maxlength: None
+    get (multiprocessing/queues.py:365)
+        Arguments:
+            self: <SimpleQueue at 0x7d2c23e33910>
+    _queued_writer (loguru/_handler.py:300)
+        Arguments:
+            self: <Handler at 0x7d2c23e32d50>
+        Locals:
+            message: "2026-04-27 16:53:44.486 | INFO     | src.brain.strategist:create_trade_plan:409 | STRAT_CALL_A_END | el=76094ms trades=0 fa..."
+            queue: <SimpleQueue at 0x7d2c23e33910>
+            lock: <_thread.lock at 0x7d2c23e33f40>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c23e34050>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c23e34050>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c23e34050>
+Thread 762 (idle): "loguru-writer-4"
+    _recv (multiprocessing/connection.py:383)
+        Arguments:
+            self: <Connection at 0x7d2c23e34f10>
+            size: 4
+            read: <builtin_function_or_method at 0x7d2c2674c680>
+        Locals:
+            buf: <_io.BytesIO at 0x7d2c23e4f470>
+            handle: 16
+            remaining: 4
+    _recv_bytes (multiprocessing/connection.py:418)
+        Arguments:
+            self: <Connection at 0x7d2c23e34f10>
+            maxsize: None
+    recv_bytes (multiprocessing/connection.py:220)
+        Arguments:
+            self: <Connection at 0x7d2c23e34f10>
+            maxlength: None
+    get (multiprocessing/queues.py:365)
+        Arguments:
+            self: <SimpleQueue at 0x7d2c23e34f90>
+    _queued_writer (loguru/_handler.py:300)
+        Arguments:
+            self: <Handler at 0x7d2c23e34510>
+        Locals:
+            message: "2026-04-27 16:47:29.117 | INFO     | src.alerts.alert_manager:_send:201 | ALERT_SENT | level=info len=643 | did=d-177730836..."
+            queue: <SimpleQueue at 0x7d2c23e34f90>
+            lock: <_thread.lock at 0x7d2c23e35780>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c23e35850>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c23e35850>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c23e35850>
+Thread 764 (idle): "loguru-writer-5"
+    _recv (multiprocessing/connection.py:383)
+        Arguments:
+            self: <Connection at 0x7d2c23e366d0>
+            size: 4
+            read: <builtin_function_or_method at 0x7d2c2674c680>
+        Locals:
+            buf: <_io.BytesIO at 0x7d2be1001d00>
+            handle: 19
+            remaining: 4
+    _recv_bytes (multiprocessing/connection.py:418)
+        Arguments:
+            self: <Connection at 0x7d2c23e366d0>
+            maxsize: None
+    recv_bytes (multiprocessing/connection.py:220)
+        Arguments:
+            self: <Connection at 0x7d2c23e366d0>
+            maxlength: None
+    get (multiprocessing/queues.py:365)
+        Arguments:
+            self: <SimpleQueue at 0x7d2c23e36750>
+    _queued_writer (loguru/_handler.py:300)
+        Arguments:
+            self: <Handler at 0x7d2c23e35d90>
+        Locals:
+            message: "2026-04-27 14:55:08.167 | WARNING  | src.core.decorators:async_wrapper:48 | Retry exhausted for get_economic_calendar after..."
+            queue: <SimpleQueue at 0x7d2c23e36750>
+            lock: <_thread.lock at 0x7d2c23e36f40>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c23e37010>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c23e37010>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c23e37010>
+Thread 765 (idle): "Thread-1"
+    wait (threading.py:324)
+        Arguments:
+            self: <Condition at 0x7d2c23e4b910>
+            timeout: 0.0999994459998561
+        Locals:
+            waiter: <_thread.lock at 0x7d2bf0271280>
+            saved_state: None
+            gotit: False
+    get (queue.py:180)
+        Arguments:
+            self: <Queue at 0x7d2c23e48490>
+            block: True
+            timeout: 0.1
+        Locals:
+            endtime: 25010.051925378
+            remaining: 0.0999994459998561
+    run (aiosqlite/core.py:95)
+        Arguments:
+            self: <Connection at 0x7d2c23e4ba50>
+        Locals:
+            future: <_asyncio.Future at 0x7d2be194f010>
+            function: <functools.partial at 0x7d2be1055a80>
+            result: []
+            set_result: <function at 0x7d2bf09e6f20>
+            set_exception: <function at 0x7d2be1964c20>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Connection at 0x7d2c23e4ba50>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Connection at 0x7d2c23e4ba50>
+Thread 767 (idle): "asyncio_0"
+    _worker (concurrent/futures/thread.py:81)
+        Arguments:
+            executor_reference: <weakref.ReferenceType at 0x7d2c214db290>
+            work_queue: <_queue.SimpleQueue at 0x7d2c23dfed90>
+            initializer: None
+            initargs: ()
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2c243e09d0>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2c243e09d0>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2c243e09d0>
+Thread 862 (idle): "Thread-2"
+    wait (threading.py:324)
+        Arguments:
+            self: <Condition at 0x7d2bf8919310>
+            timeout: 0.09999951799909468
+        Locals:
+            waiter: <_thread.lock at 0x7d2be1ac25c0>
+            saved_state: None
+            gotit: False
+    get (queue.py:180)
+        Arguments:
+            self: <Queue at 0x7d2bf89183d0>
+            block: True
+            timeout: 0.1
+        Locals:
+            endtime: 25010.074876331
+            remaining: 0.09999951799909468
+    run (aiosqlite/core.py:95)
+        Arguments:
+            self: <Connection at 0x7d2c214f5550>
+        Locals:
+            future: <_asyncio.Future at 0x7d2c23ebd6c0>
+            function: <functools.partial at 0x7d2bf89122a0>
+            result: <sqlite3.Cursor at 0x7d2bf891d340>
+            set_result: <function at 0x7d2c214ead40>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Connection at 0x7d2c214f5550>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Connection at 0x7d2c214f5550>
+Thread 1144 (idle): "Thread-3 (<lambda>)"
+    select (selectors.py:468)
+        Arguments:
+            self: <EpollSelector at 0x7d2bf03a0650>
+            timeout: 10
+        Locals:
+            max_ev: 1
+            ready: []
+    select (websocket/_dispatcher.py:121)
+        Arguments:
+            self: <SSLDispatcher at 0x7d2bf039dc90>
+            sock: <SSLSocket at 0x7d2bf02bf2a0>
+            sel: <EpollSelector at 0x7d2bf03a0650>
+    read (websocket/_dispatcher.py:105)
+        Arguments:
+            self: <SSLDispatcher at 0x7d2bf039dc90>
+            sock: <SSLSocket at 0x7d2bf02bf2a0>
+            read_callback: <function at 0x7d2bf0373a60>
+            check_callback: <function at 0x7d2bf0373b00>
+        Locals:
+            sel: <EpollSelector at 0x7d2bf03a0650>
+    initialize_socket (websocket/_app.py:432)
+        Arguments:
+            reconnecting: False
+        Locals:
+            header: []
+    run_forever (websocket/_app.py:556)
+        Arguments:
+            self: <cell at 0x7d2bf0354160>
+            sockopt: <cell at 0x7d2bf0356c50>
+            sslopt: <cell at 0x7d2bf0354190>
+            ping_interval: 20
+            ping_timeout: 10
+            ping_payload: ""
+            http_proxy_host: <cell at 0x7d2bf0354130>
+            http_proxy_port: <cell at 0x7d2bf02cc370>
+            http_no_proxy: <cell at 0x7d2bf02cc760>
+            http_proxy_auth: <cell at 0x7d2bf02cc7c0>
+            http_proxy_timeout: <cell at 0x7d2bf02cc7f0>
+            skip_utf8_validation: <cell at 0x7d2bf02cc820>
+            host: <cell at 0x7d2bf02cc850>
+            origin: <cell at 0x7d2bf02cc880>
+            dispatcher: <cell at 0x7d2bf02cc8b0>
+            suppress_origin: <cell at 0x7d2bf02cc8e0>
+            proxy_type: <cell at 0x7d2bf02cc910>
+            reconnect: <cell at 0x7d2bf02cc940>
+    <lambda> (pybit/_websocket_stream.py:162)
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2bf04b15d0>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2bf04b15d0>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2bf04b15d0>
+Thread 1145 (idle): "Thread-4 (_send_ping)"
+    wait (threading.py:324)
+        Arguments:
+            self: <Condition at 0x7d2bf03a0cd0>
+            timeout: 20
+        Locals:
+            waiter: <_thread.lock at 0x7d2c214ab640>
+            saved_state: None
+            gotit: False
+    wait (threading.py:622)
+        Arguments:
+            self: <Event at 0x7d2bf039e9d0>
+            timeout: 20
+        Locals:
+            signaled: False
+    _send_ping (websocket/_app.py:244)
+        Arguments:
+            self: <WebSocketApp at 0x7d2bf04b2750>
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2bf03a8b90>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2bf03a8b90>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2bf03a8b90>
+Thread 1147 (idle): "asyncio_1"
+    _worker (concurrent/futures/thread.py:81)
+        Arguments:
+            executor_reference: <weakref.ReferenceType at 0x7d2be19a3d80>
+            work_queue: <_queue.SimpleQueue at 0x7d2c23dfed90>
+            initializer: None
+            initargs: ()
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2be19b2710>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2be19b2710>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2be19b2710>
+Thread 3560 (idle): "asyncio_2"
+    _worker (concurrent/futures/thread.py:81)
+        Arguments:
+            executor_reference: <weakref.ReferenceType at 0x7d2be1054cc0>
+            work_queue: <_queue.SimpleQueue at 0x7d2c23dfed90>
+            initializer: None
+            initargs: ()
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2be1038b50>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2be1038b50>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2be1038b50>
+Thread 7993 (idle): "asyncio_3"
+    _worker (concurrent/futures/thread.py:81)
+        Arguments:
+            executor_reference: <weakref.ReferenceType at 0x7d2be10038d0>
+            work_queue: <_queue.SimpleQueue at 0x7d2c23dfed90>
+            initializer: None
+            initargs: ()
+    run (threading.py:975)
+        Arguments:
+            self: <Thread at 0x7d2be101de90>
+    _bootstrap_inner (threading.py:1038)
+        Arguments:
+            self: <Thread at 0x7d2be101de90>
+    _bootstrap (threading.py:995)
+        Arguments:
+            self: <Thread at 0x7d2be101de90>

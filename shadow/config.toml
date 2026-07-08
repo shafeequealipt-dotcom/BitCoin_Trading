@@ -1,0 +1,60 @@
+# =============================================================================
+# Shadow — Configuration
+# =============================================================================
+# All settings for the Shadow data warehouse and virtual exchange.
+# Secrets go in .env (not here). This file is safe for version control.
+# =============================================================================
+
+[general]
+project_name = "Shadow"
+log_level = "INFO"
+log_dir = "logs"
+
+[bybit]
+# Mainnet API — public endpoints only, no API key needed for data
+base_url = "https://api.bybit.com"
+ws_url = "wss://stream.bybit.com/v5/public/linear"
+
+[collector]
+coin_count = 100                    # Number of coins to track by volume
+coin_refresh_interval = 86400       # Re-rank coins daily (seconds)
+kline_interval = "1"                # 1-minute klines
+ticker_snapshot_interval = 60       # Save ticker snapshot every 60 seconds
+funding_rate_interval = 28800       # Check funding every 8 hours (seconds)
+open_interest_interval = 300        # OI every 5 minutes (seconds)
+
+[exchange]
+starting_balance = 10000.0          # Default starting balance (USD)
+taker_fee_rate = 0.00055            # 0.055% — Bybit standard taker fee
+maker_fee_rate = 0.00020            # 0.02% — for future limit orders
+slippage_pct = 0.03                 # 0.03% default market slippage
+slippage_mode = "fixed"             # "fixed" or "random"
+slippage_min = 0.01                 # Min slippage if random mode (%)
+slippage_max = 0.05                 # Max slippage if random mode (%)
+position_monitor_interval = 1       # Check SL/TP every N seconds
+
+[database]
+path = "data/shadow.db"
+wal_mode = true
+ticker_retention_days = 30
+oi_retention_days = 90
+wallet_snapshot_retention_days = 30
+
+[api]
+host = "127.0.0.1"
+port = 9090
+
+[telegram]
+chat_id = 0
+send_trade_alerts = true
+send_daily_summary = true
+send_health_alerts = true
+
+[retention]
+klines = "forever"
+funding_rates = "forever"
+trade_history = "forever"
+daily_summary = "forever"
+ticker_snapshots_days = 30
+open_interest_days = 90
+wallet_snapshots_days = 30

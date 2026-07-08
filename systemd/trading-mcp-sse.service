@@ -1,0 +1,51 @@
+[Unit]
+Description=Trading Intelligence - MCP SSE Server
+Documentation=https://github.com/user/trading-intelligence-mcp
+After=network-online.target trading-workers.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=inshadaliqbal786
+Group=inshadaliqbal786
+WorkingDirectory=/home/inshadaliqbal786/trading-intelligence-mcp
+Environment="PATH=/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin:/usr/bin"
+
+# Claude CLI writable-state isolation (2026-06-11 headless-wedge fix) —
+# same rationale as trading-workers.service: the CLI silently wedges when
+# it cannot write its state under ProtectHome=read-only. Separate config
+# dir from the workers' (two processes must not share one state dir);
+# .credentials.json inside it is a symlink to ~/.claude/.credentials.json.
+Environment="CLAUDE_CONFIG_DIR=/home/inshadaliqbal786/trading-intelligence-mcp/data/claude-config-mcp"
+Environment="DISABLE_UPDATES=1"
+
+EnvironmentFile=/home/inshadaliqbal786/trading-intelligence-mcp/.env
+ExecStart=/home/inshadaliqbal786/trading-intelligence-mcp/.venv/bin/python server.py --transport sse --port 8080
+Restart=always
+RestartSec=10
+
+# Resource limits
+MemoryMax=200M
+MemoryHigh=150M
+CPUQuota=50%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/inshadaliqbal786/trading-intelligence-mcp/data
+# .claude/: real OAuth credentials file behind the claude-config-mcp symlink —
+# the CLI must be able to persist a refreshed token through it
+ReadWritePaths=/home/inshadaliqbal786/.claude
+# MCP debug-log cache (same EROFS-retry issue as in trading-workers.service)
+ReadWritePaths=/home/inshadaliqbal786/.cache/claude-cli-nodejs
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging — application handles its own logging to data/logs/
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,202 @@
+[
+  {
+    "fix_id": "G1",
+    "description": "Strategist CALL_A/B try/finally pairing",
+    "expected_tag": "STRAT_CALL_A_END + STRAT_CALL_B_END",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "both finally + END tags present in source",
+    "notes": "Driven by layer_manager.py:770 (CALL_A) + :938 (CALL_B) at runtime",
+    "level": ""
+  },
+  {
+    "fix_id": "G2",
+    "description": "Sniper tick heartbeat",
+    "expected_tag": "SNIPER_TICK",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "SNIPER_TICK | tick=12 el=50ms n=2 syms=[BTCUSDT,ETHUSDT] mode=bybit_demo sl_updates_attempted=3 sl_updates_accepted=2 | no_ctx",
+    "notes": "counters snapshot + reset confirmed",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G3",
+    "description": "WS EXEC_NON_CLOSE INFO + partial=N",
+    "expected_tag": "BYBIT_DEMO_WS_EXEC_NON_CLOSE",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "BYBIT_DEMO_WS_EXEC_NON_CLOSE | sym=BTCUSDT oid=X side=Buy exec_price=80000.0 exec_qty=0.001 exec_fee=0.0 closed_size=0.0 exec_type=Trade partial=N | no_ctx",
+    "notes": "",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G4",
+    "description": "WS POS_UPDATE non-flat snapshot",
+    "expected_tag": "BYBIT_DEMO_WS_POS_UPDATE",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "BYBIT_DEMO_WS_POS_UPDATE | sym=ETHUSDT side=Sell qty=0.5 entry_price=3000.0 mark_price=3003.0 unrealized_pnl=-1.5 sl_price=3100.0 tp_price=2800.0 lev=5 status=Normal | no_ctx",
+    "notes": "full snapshot fields present",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G5",
+    "description": "WS ORDER lifecycle transitions",
+    "expected_tag": "BYBIT_DEMO_WS_ORDER",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "BYBIT_DEMO_WS_ORDER | sym=BTCUSDT oid=ORD-1 status=PartiallyFilled side=Buy qty=0.05 price=80000 sl_price= tp_price= order_type=Market link_id= | no_ctx",
+    "notes": "",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G6",
+    "description": "COORD_REG fields + COORD_DUPLICATE_REGISTER",
+    "expected_tag": "COORD_REG + COORD_DUPLICATE_REGISTER",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "COORD_REG | sym=BTCUSDT src=claude_direct cat=default side=Buy qty=0.05 entry_price=80000.0 sl=78000.0 tp=84000.0 leverage=5 size_usd=4000.0 immunity=60s did=d-1 order_id=ORD-1 | no_ctx || COORD_DUPLICATE_REGISTER | sym=BTCUSDT prior_did=d-1 prior_age_s=0.0 new_did=d-2 new_src=brain_v2 | no_ctx",
+    "notes": "dup detection on second register_trade",
+    "level": ""
+  },
+  {
+    "fix_id": "G9",
+    "description": "STRAT_CALL_B_CTX lessons_in_db",
+    "expected_tag": "STRAT_CALL_B_CTX (with lessons_in_db field)",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "",
+    "notes": "field built from lessons_avail length in CALL_B ctx emission",
+    "level": ""
+  },
+  {
+    "fix_id": "G10",
+    "description": "SLTP_PAIR_OK success-path emission",
+    "expected_tag": "SLTP_PAIR_OK",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "SLTP_PAIR_OK | sym=BTCUSDT side=Buy sl_pct=2.500 tp_pct=5.000 delta_bps=750.00 max_dist_pct=10 min_gap_bps=10.00 decision=OK checks=invalid_price,sl_equals_tp,wrong_side | no_ctx",
+    "notes": "",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G11",
+    "description": "time_decay INFO level (G11 downgrade)",
+    "expected_tag": "TIME_DECAY_AGE_GUARD",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "TIME_DECAY_AGE_GUARD | sym=BTCUSDT age=150s min_age=300s pnl=-0.50% mae=-0.50% p_win=0.500 blocked=true | no_ctx",
+    "notes": "level confirmed INFO (was WARNING pre-G11)",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "I1a",
+    "description": "Client recv_window default 10000",
+    "expected_tag": "BybitDemoClient.__init__(recv_window=10000)",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "recv_window default = 10000",
+    "notes": "was 5000 pre-I1",
+    "level": ""
+  },
+  {
+    "fix_id": "I2",
+    "description": "TradeState.exchange_mode captured at registration",
+    "expected_tag": "TradeState.exchange_mode = 'bybit_demo'",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "state.exchange_mode = 'bybit_demo'",
+    "notes": "manager.py:2272 reads this at close-fan-out time",
+    "level": ""
+  },
+  {
+    "fix_id": "I3",
+    "description": "PNL_MISMATCH retry-guard + force-commit",
+    "expected_tag": "WD_PNL_MISMATCH_BLOCKED + WD_PNL_MISMATCH_FORCED",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "",
+    "notes": "retry dict + 5-budget + force-commit branch all present",
+    "level": ""
+  },
+  {
+    "fix_id": "I4a",
+    "description": "kline_worker chunked staleness scan",
+    "expected_tag": "DB_WRITE_DEFERRED + chunked IN clause",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "",
+    "notes": "100-symbol chunks + sleep(0) yield between batches",
+    "level": ""
+  },
+  {
+    "fix_id": "I4b",
+    "description": "DB_LOCK_BREAKDOWN top-5 caller attribution",
+    "expected_tag": "DB_LOCK_BREAKDOWN | trigger=cascade top_callers=[...]",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "",
+    "notes": "paired with CASCADE_DETECTED on >5s lock wait",
+    "level": ""
+  },
+  {
+    "fix_id": "I5c",
+    "description": "register_trade_plan emits TRADEPLAN_PERSISTED",
+    "expected_tag": "TRADEPLAN_PERSISTED",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "TRADEPLAN_PERSISTED | sym=BTCUSDT dir=Buy entry=80000.0 sl=78000.0 tp=84000.0 hold_min=120 tier=standard | no_ctx",
+    "notes": "",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "G8",
+    "description": "THESIS_OPEN with target_pct/stop_pct/max_hold/order_id",
+    "expected_tag": "THESIS_OPEN",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "THESIS_OPEN | id=1 sym=BTCUSDT dir=long ent=80000.0 sl=78000.0 tp=84000.0 target_pct=5.000 stop_pct=2.500 lev=5 size_usd=4000.0 max_hold_min=120 order_id=ORD-G8 | no_ctx",
+    "notes": "",
+    "level": "INFO"
+  },
+  {
+    "fix_id": "I1b",
+    "description": "Adapter UNKNOWN_STATE on transport error",
+    "expected_tag": "BYBIT_DEMO_POSITIONS_UNKNOWN_STATE",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "BYBIT_DEMO_POSITIONS_UNKNOWN_STATE | reason=timestamp_fail err='[2026-05-14T12:19:15.991053+00:00] BybitAPIError: 10002 simulated timestamp fail | details={'ret_code': 10002}' | no_ctx",
+    "notes": "confirmed=False reason='timestamp_fail'",
+    "level": "WARNING"
+  },
+  {
+    "fix_id": "I1c",
+    "description": "Shadow parity get_positions_with_confirmation",
+    "expected_tag": "SHADOW_POSITIONS_UNKNOWN_STATE",
+    "mode": "source-pin",
+    "passed": true,
+    "captured": "",
+    "notes": "method present + emission present in source",
+    "level": ""
+  },
+  {
+    "fix_id": "I5a",
+    "description": "Coordinator recover_state_from_db",
+    "expected_tag": "DASHBOARD_STATE_RECOVERED + BOOT_STATE_RECOVERED",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "DASHBOARD_STATE_RECOVERED | sym=BTCUSDT side=long entry_price=80000.0 size_usd=4000.0 lev=5 order_id=ORD-G8 mode=shadow | no_ctx",
+    "notes": "restored=2 keys=['BTCUSDT', 'ADAUSDT']",
+    "level": ""
+  },
+  {
+    "fix_id": "I5b",
+    "description": "DailyPnLManager restore today's row",
+    "expected_tag": "DASHBOARD_STATE_RECOVERED | scope=daily_pnl",
+    "mode": "runtime",
+    "passed": true,
+    "captured": "DASHBOARD_STATE_RECOVERED | scope=daily_pnl date=2026-05-14 starting_equity=1000.00 realized_pnl=+25.0000 trades=2 wins=1 losses=1 max_dd_pct=-2.5000",
+    "notes": "realized=25.0 trades=2 wins=1 losses=1",
+    "level": ""
+  }
+]

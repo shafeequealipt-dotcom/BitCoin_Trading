@@ -1,0 +1,121 @@
+"""Executes Brain trading decisions with comprehensive safety checks."""
+
+from src.config.settings import Settings
+from src.core.exceptions import ExecutionError
+from src.core.logging import get_logger
+from src.core.types import BrainDecision, OrderType, Side
+from src.database.connection import DatabaseManager
+
+log = get_logger("brain")
+
+
+class BrainExecutor:
+    """Executes Brain decisions through trading services with safety guards.
+
+    Args:
+        settings: Application settings.
+        services: Dict of service instances (order, position, account, market).
+    """
+
+    def __init__(self, settings: Settings, services: dict) -> None:
+        self.settings = settings
+        self._services = services
+
+    async def execute(self, decision: BrainDecision) -> dict:
+        """Execute a trading decision with full safety checks.
+
+        Args:
+            decision: Parsed BrainDecision from Claude.
+
+        Returns:
+            Result dict with executed, action, details, order, error.
+        """
+        # Step 1: Safety checks
+        check = self._pre_execution_checks(decision)
+        if check:
+            log.warning("Brain execution blocked: {reason}", reason=check)
+            return {"executed": False, "action": decision.action, "details": check, "order": None, "error": check}
+
+        # Step 2: Execute
+        try:
+            if decision.action == "hold":
+                return {"executed": False, "action": "hold", "details": decision.reasoning, "order": None, "error": None}
+
+            if decision.action in ("buy", "sell"):
+                order = await self._place_trade(decision)
+                log.info(
+                    "Brain executed: {action} {sym} | Order ID: {oid}",
+                    action=decision.action, sym=decision.symbol,
+                    oid=order.order_id if order else "N/A",
+                )
+                return {"executed": True, "action": decision.action, "details": decision.reasoning, "order": order, "error": None}
+
+            if decision.action == "close":
+                position_svc = self._services.get("position")
+                if not position_svc:
+                    return {"executed": False, "action": "close", "details": "Position service not available", "order": None, "error": "no service"}
+                order = await position_svc.close_position(decision.symbol)
+                log.info("Brain closed position: {sym}", sym=decision.symbol)
+                return {"executed": True, "action": "close", "details": decision.reasoning, "order": order, "error": None}
+
+            return {"executed": False, "action": decision.action, "details": f"Unknown action: {decision.action}", "order": None, "error": "unknown action"}
+
+        except Exception as e:
+            log.error("Brain execution failed: {err}", err=str(e))
+            return {"executed": False, "action": decision.action, "details": str(e), "order": None, "error": str(e)}
+
+    def _pre_execution_checks(self, decision: BrainDecision) -> str | None:
+        """Run all safety checks. Returns error message or None if ok."""
+        if not self.settings.brain.enabled:
+            return "Brain is disabled in config"
+
+        if decision.confidence < self.settings.brain.min_signal_confidence:
+            return f"Confidence {decision.confidence:.2f} below minimum {self.settings.brain.min_signal_confidence}"
+
+        if decision.action == "hold":
+            return None  # Hold always allowed
+
+        if decision.action in ("buy", "sell"):
+            sl = getattr(decision, "_stop_loss", None)
+            if sl is None and self.settings.risk.mandatory_stop_loss:
+                return "Stop-loss is mandatory but not provided by Brain"
+
+            leverage = getattr(decision, "_leverage", 1)
+            if leverage > self.settings.risk.max_leverage:
+                return f"Leverage {leverage} exceeds max {self.settings.risk.max_leverage}"
+
+        return None
+
+    async def _place_trade(self, decision: BrainDecision):
+        """Place a buy or sell order from a Brain decision."""
+        order_svc = self._services.get("order")
+        account_svc = self._services.get("account")
+        market_svc = self._services.get("market")
+
+        if not order_svc or not account_svc or not market_svc:
+            raise ExecutionError("Required trading services not available")
+
+        # Calculate quantity from qty_pct
+        account = await account_svc.get_wallet_balance()
+        qty_pct = getattr(decision, "_qty_pct", 5.0)
+        qty_usdt = account.available_balance * (qty_pct / 100)
+
+        ticker = await market_svc.get_ticker(decision.symbol)
+        qty = qty_usdt / ticker.last_price if ticker.last_price > 0 else 0
+
+        if qty <= 0:
+            raise ExecutionError("Calculated quantity is zero")
+
+        side = Side.BUY if decision.action == "buy" else Side.SELL
+        order_type = decision.order_type if decision.order_type else OrderType.MARKET
+
+        return await order_svc.place_order(
+            symbol=decision.symbol,
+            side=side,
+            order_type=order_type,
+            qty=qty,
+            price=getattr(decision, "_limit_price", None),
+            stop_loss=getattr(decision, "_stop_loss", None),
+            take_profit=getattr(decision, "_take_profit", None),
+            leverage=getattr(decision, "_leverage", 1),
+        )

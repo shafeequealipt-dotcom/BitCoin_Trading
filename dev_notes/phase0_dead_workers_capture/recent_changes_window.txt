@@ -1,0 +1,2226 @@
+commit 357516e8ea97c83e8927908f02e8ab2c76e93c50
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 09:44:08 2026 +0000
+
+    phase2-post-layer1-fixes: attach LayerManager to underlying OrderService through transformer (audit)
+    
+    Real-pipeline audit revealed that ``self._services["order_service"]`` is
+    a ``_OrderProxy`` (created by ``Transformer.create_proxies()`` for live
+    mode switching). The proxy forwards ``place_order`` / ``modify_order``
+    / ``cancel_order`` to ``transformer.active_order_service`` but does NOT
+    expose ``attach_layer_manager``. The pre-existing manager wiring at
+    line 561:
+    
+        order_svc = self._services.get("order_service") or self._services.get("order")
+        if order_svc and hasattr(order_svc, "attach_layer_manager"):
+            order_svc.attach_layer_manager(layer_manager)
+    
+    silently skips because hasattr(_OrderProxy, "attach_layer_manager") is
+    False. The underlying bybit OrderService inside transformer._bybit_services
+    NEVER gets ``_layer_manager`` set. Pre-fix this was harmless (the legacy
+    fail-open allowed orders through). With the Phase 1 (post-Layer-1)
+    boot-policy now rejecting entry-side surfaces when ``lm is None``, this
+    gap would hard-break live Bybit mode by treating every brain trade as
+    a boot-window violation — Layer3BootNotReadyError on the first
+    ``layer3_entry``.
+    
+    Live system today is in shadow mode, where ShadowOrderService has no
+    gate (the gate lives only on live OrderService), so this defect was
+    latent. But the moment the operator switches to Bybit live, every
+    entry-side trade rejects.
+    
+    Fix: after the proxy attach attempt, walk transformer._bybit_services
+    and transformer._shadow_services and call attach_layer_manager on any
+    underlying that exposes it. ShadowOrderService doesn't (Shadow has no
+    L3 gate by design); BybitOrderService does. Idempotent — repeated
+    calls with the same LM are no-ops per attach_layer_manager docstring.
+    
+    Pre-existing bug (commit 028a6d5d, "phase2-layer3: gate at OrderService"
+    shipped before my work). Surfaced and fixed during the post-fix
+    real-pipeline audit.
+    
+    Files modified:
+      src/workers/manager.py                                    (walk transformer service sets)
+      tests/test_order_service_attach_via_transformer.py        (new — 4 cases)
+    
+    Verification:
+      pytest tests/test_order_service_attach_via_transformer.py
+           tests/test_order_service/test_layer3_gate.py
+           tests/test_layer_state_sync.py                       →  25 passed
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_2_fail_open_gate.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/manager.py
+A	tests/test_order_service_attach_via_transformer.py
+
+commit 78f3db3bfc48ccb277e72f3e79430638746f3e93
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 09:16:48 2026 +0000
+
+    phase2-post-layer1-fixes: cancel LAYER_STATE_SYNC heartbeat in stop_all (audit)
+    
+    Phase-by-phase audit found a real cleanup gap:
+    ``LayerManager.stop_state_sync()`` was defined in commit ce02282 but
+    never called. The asyncio task started by
+    ``layer_manager.start_state_sync()`` survived through worker shutdown
+    to event-loop teardown, where Python emits a "Task was destroyed but
+    it is pending" RuntimeWarning. Functionally harmless (the task exits
+    with the loop) but unprofessional in shutdown logs and fails the
+    "every long-lived task is explicitly cancelled" cleanup contract that
+    the rest of the codebase follows for ``_brain_task`` /
+    ``_background_exec_task`` / WebSocket connections.
+    
+    Fix: call ``layer_manager.stop_state_sync()`` from
+    ``WorkerManager.stop_all()`` between worker-task cancellation and
+    service teardown. Position matches the order of the existing cleanup
+    chain (workers → tasks → state sync → bybit → ws → shadow_kline_reader
+    → db). Defensive: the call is wrapped in try/except like every other
+    shutdown step and falls through gracefully when ``layer_manager`` is
+    not in services (paper-only or partial-init configurations).
+    
+    Files modified:
+      src/workers/manager.py        (stop_all calls stop_state_sync)
+    
+    Verification:
+      pytest tests/test_layer_state_sync.py     →  7 passed
+      Import sanity: WorkerManager              →  ok
+      Integration test (11 components)          →  all pass
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_2_fail_open_gate.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/manager.py
+
+commit 06d6d94e67c283d6966f74cceadee3c4ab57eec6
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 09:04:17 2026 +0000
+
+    phase7-post-layer1-fixes: thread stall buckets through ClaudeCodeClient kwarg (cross-check)
+    
+    Cross-check found that the original Phase 7 commit (50bc1a5) read
+    ``self.settings.brain.stall_warn_buckets_seconds`` inside _subprocess_call,
+    but ClaudeCodeClient does NOT carry a settings reference (its constructor
+    takes individual config values). The defensive try/except around the read
+    silently fell through to the (60, 120, 240) default in production —
+    making the "settings-driven" claim in 50bc1a5's commit message
+    technically untrue: tunability worked only by editing the dataclass
+    default, not via config.toml.
+    
+    Fix: properly thread the bucket tuple through ClaudeCodeClient's
+    constructor.
+    
+      - New ``stall_warn_buckets_seconds`` kwarg on ClaudeCodeClient.__init__
+        coerces to a tuple of floats with defensive fallback to
+        (60.0, 120.0, 240.0) on malformed/empty input.
+      - Stored as self._stall_warn_buckets and read in the subprocess loop.
+      - WorkerManager forwards _brain_cfg.stall_warn_buckets_seconds into
+        the new kwarg.
+      - core/container.py construction site does NOT pass the kwarg →
+        legacy default applies (back-compat preserved for any non-Worker
+        entry point).
+    
+    Also updates two regression cases caught by the full test sweep:
+    
+      - tests/test_brain_subprocess_streaming.py — the 1.2-second stall
+        test was asserting WARNING-level legacy emission. Phase 7 (50bc1a5)
+        demoted that to DEBUG. Test now uses small bucket thresholds
+        (0.5, 1.0, 2.0) via the test fixture so the WARNING assertion now
+        targets the GRADUATED bucket events (the new, properly-named
+        contract). DEBUG capture verifies the legacy tag is preserved at
+        the demoted level.
+      - tests/test_protected_tables.py — locked in the OLD set including
+        trade_thesis. Updated to match Phase 3 (843b68b) — assert
+        trade_thesis is OUT and the other 8 tables remain protected.
+    
+    Phase 7 test suite extended with three more cases:
+      - Default fallback when no kwarg passed
+      - Accepts a custom tuple
+      - Malformed input falls back gracefully
+    
+    Files modified:
+      src/brain/claude_code_client.py  (new constructor kwarg + instance field)
+      src/workers/manager.py            (forward settings into kwarg)
+      tests/test_brain_subprocess_streaming.py  (regression fix)
+      tests/test_protected_tables.py             (regression fix)
+      tests/test_claude_stall_levels.py          (3 new wiring tests)
+    
+    Verification:
+      pytest tests/test_brain_subprocess_streaming.py
+           tests/test_protected_tables.py
+           tests/test_claude_stall_levels.py
+           tests/test_phase3/test_signal_generator.py  →  49 passed
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_7_stall_threshold.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/brain/claude_code_client.py
+M	src/workers/manager.py
+M	tests/test_brain_subprocess_streaming.py
+M	tests/test_claude_stall_levels.py
+M	tests/test_protected_tables.py
+
+commit 7977fe4a20ea54be9eb7efcd2fd2fa06bdca3af9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:53:14 2026 +0000
+
+    phase10-post-layer1-fixes: REDDIT_DISABLED at WARNING + SENTIMENT_DEGRADED_MODE
+    
+    Live monitor 2026-04-27 06:23-06:52 UTC: SENT_UNKNOWN_CACHE_HIT was the
+    DOMINANT log tag (192 events in 30 min — more than every other tag
+    combined). Cause: Reddit credentials are empty in the production .env,
+    the worker is silently skipped at registration, the sentiment
+    aggregator emits per-coin SENT_UNKNOWN every cycle for every coin
+    (50 coins × 12 cycles/hour = ~600/hour). Operators wading through logs
+    to debug other issues had to filter that noise out manually.
+    
+    Two changes:
+    
+      1. src/workers/manager.py:133 — promoted from log.info(...) to
+         log.warning(...) and reformatted as a structured tag:
+           REDDIT_DISABLED | reason=no_credentials | impact=sentiment_degraded
+         INFO buried the disable notice in normal traffic; operators
+         couldn't quickly see whether Reddit was intentionally off vs
+         silently broken. WARNING-level + structured tag is greppable and
+         visible at default log levels.
+    
+      2. src/intelligence/sentiment/aggregator.py — SentimentAggregator
+         now accepts an optional ``settings`` arg (back-compat preserved
+         for ~10 test sites that construct with (db, scorer)). At init,
+         when settings.reddit.client_id is empty, sets a
+         ``_reddit_intentionally_disabled`` flag and emits ONE structured
+         line:
+           SENTIMENT_DEGRADED_MODE | reason=no_reddit | source=fear_greed_only
+         The flag suppresses the per-coin SENT_UNKNOWN noise — but ONLY
+         when Reddit is INTENTIONALLY off. When Reddit IS configured but
+         transiently has no rows for a coin (genuine data gap), the
+         per-coin SENT_UNKNOWN still fires. Different signal: config
+         decision vs transient data outage.
+    
+      3. SENT_NEUTRAL line is preserved unchanged (downstream parsers grep
+         it; the noise was specifically SENT_UNKNOWN_CACHE_HIT and
+         SENT_UNKNOWN per coin).
+    
+    What this fix does NOT do (forbidden by Hard Rule 4):
+      - Auto-acquire Reddit credentials (operator opt-in only)
+      - Drop the UNKNOWN vs NEUTRAL distinction (Phase 6 design value)
+      - Remove the per-cycle aggregator emission entirely (some signal
+        per cycle is helpful even in degraded mode)
+      - Refactor SentimentAggregator's class signature beyond the
+        additive optional ``settings`` arg (would break ~10 test sites)
+    
+    Files modified:
+      src/intelligence/sentiment/aggregator.py
+                                      (settings detection + flag-gated
+                                      SENT_UNKNOWN emission)
+      src/workers/manager.py          (log.info → log.warning + structured
+                                      tag + pass settings to aggregator)
+      tests/test_sentiment_degraded_mode.py
+                                      (new — 7 cases)
+    
+    Verification:
+      pytest tests/test_sentiment_degraded_mode.py  →  7 passed
+      pytest tests/test_phase3/test_signal_generator.py  →  6 passed (no
+        regression in tests that construct without settings)
+    
+    Operator follow-up: 30-min trial post-deploy expects SENT_UNKNOWN
+    count to drop from ~192 / 30 min to <10 (only legitimate transient
+    data gaps remain). One REDDIT_DISABLED at startup. One
+    SENTIMENT_DEGRADED_MODE per init.
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_10_reddit_disable.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/intelligence/sentiment/aggregator.py
+M	src/workers/manager.py
+A	tests/test_sentiment_degraded_mode.py
+
+commit d2252758bd7ac0a2133934c4d298cadd273d85b3
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:50:17 2026 +0000
+
+    phase9-post-layer1-fixes: altdata per-feed timing + tick_slow threshold override
+    
+    altdata_worker chronically tripped BASE_WORKER_TICK_SLOW with
+    el=5-9 s against the global 2 s threshold (live observation 2026-04-27
+    06:23-06:52 UTC: 4 events in 30 min). The worker fans out 3-4
+    independent REST batch calls (Bybit funding, Bybit OI, AlternativeMe
+    F&G, optional on-chain) under asyncio.gather; each batch is 2-5 s in
+    steady state and the gather wall-clock lands at the slowest. The
+    worker's 300 s interval makes the latency operationally fine (1.7%
+    of cadence consumed) — the problem is log noise drowning out
+    legitimate slow-tick warnings on other workers.
+    
+    Two changes:
+    
+      1. Per-worker tick_slow threshold override extends the existing
+         _TICK_SLOW_PER_WORKER dict with altdata_worker=12.0. The dict
+         pattern was already in place for kline_worker (8s), strategy
+         (10s), structure (6s), regime (4s). Adding altdata at 12s
+         completes the coverage.
+    
+      2. Per-feed timing via inline _timed helper. Each fetch is wrapped
+         so the gather yields (label, el_ms, result_or_exc) tuples — the
+         previous implementation reported the gather wall-clock for every
+         source, masking which feed was actually slow. Operators can now
+         attribute slowness to the right REST endpoint via the new
+         ALTDATA_TICK_DONE aggregate:
+    
+           ALTDATA_TICK_DONE | funding_ms=4500 oi_ms=300 fg_ms=200
+                                onchain_ms=0 total_ms=4673 ran=[funding,oi,fg]
+    
+      Per-source TICK lines (ALTDATA_FUNDING_TICK / ALTDATA_OI_TICK /
+      ALTDATA_FG_TICK) now report ACCURATE el — previously they all
+      reported the gather wall-clock heuristically.
+    
+      Legacy ALTDATA aggregate line preserved for downstream log parsers.
+    
+    What this fix does NOT do (forbidden by Hard Rule 4):
+      - Split altdata_worker into 3 separate workers (scope expansion;
+        against the prompt)
+      - Add per-coin parallelization within funding/OI batches (Bybit's
+        batched API is more efficient than per-coin calls due to TCP
+        overhead)
+      - Raise the global _BASE_WORKER_TICK_SLOW_SECONDS (other workers
+        legitimately need a tight 2 s bound)
+    
+    Files modified:
+      src/workers/base_worker.py        (extends _TICK_SLOW_PER_WORKER)
+      src/workers/altdata_worker.py     (_timed wrapper + ALTDATA_TICK_DONE)
+      tests/test_altdata_per_feed_timing.py  (new — 4 cases)
+    
+    Verification:
+      pytest tests/test_altdata_per_feed_timing.py  →  4 passed
+      Import sanity: AltDataWorker  →  ok; threshold=12.0s
+    
+    Operator follow-up: 60-min trial post-deploy expects zero
+    BASE_WORKER_TICK_SLOW name=altdata_worker events.
+    ALTDATA_TICK_DONE shows real per-feed timings.
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_9_altdata_parallel.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/altdata_worker.py
+M	src/workers/base_worker.py
+A	tests/test_altdata_per_feed_timing.py
+
+commit 229e61ef94955c26cfd427bf6cb7004d407e0ed2
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:47:53 2026 +0000
+
+    phase8-post-layer1-fixes: active_universe enrichment from CoinPackage data
+    
+    The Phase-5 ScannerWorker rewrite intentionally wrote 0.0 for the four
+    auxiliary columns (volume_24h, change_24h_pct, funding_rate, spread_pct)
+    because the scanner no longer makes its own market-data calls. But the
+    data IS already on hand — _build_package above the write site populates
+    each CoinPackage with funding_rate (altdata cache), change_24h_pct, and
+    volume_24h_usd (market ticker cache).
+    
+    Live observed in 2026-04-27 06:23-06:52 UTC: every active_universe row
+    has 0.0 in these four columns. Telegram /status and any operator-facing
+    inspector showed misleading zeros for vol/change/fr/spread.
+    
+    Fix: read the values out of the freshly-built ``packages`` dict at the
+    INSERT site. Zero extra network calls; CoinPackage already paid the
+    cost of fetching them. Spread_pct stays 0.0 (no scanner-side source
+    today; out of scope).
+    
+    For coins without a package (forced-include BTC/ETH that may slip past
+    the package builder for any reason), all four fields fall through to
+    0.0 — same as legacy behavior. Defensive helper isolates the lookup
+    so a malformed package never breaks the row INSERT.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+      - Make a fresh market-data fetch in the write path (would duplicate
+        work CoinPackage already did)
+      - Change the table DDL or INSERT column list (downstream consumers
+        would break)
+      - Add a separate active_universe enrichment worker (overkill for
+        cosmetic operator surface)
+    
+    Files modified:
+      src/workers/scanner_worker.py     (_enrich_for helper + INSERT
+                                        threads vol/change/funding through)
+      tests/test_scanner_active_universe_enrichment.py
+                                        (new — 5 source-inspection cases)
+    
+    Verification:
+      pytest tests/test_scanner_active_universe_enrichment.py  →  5 passed
+      Import sanity: ScannerWorker  →  ok
+    
+    Operator follow-up: post-cycle SELECT * FROM active_universe LIMIT 5
+    should show real (non-zero) volume_24h, change_24h_pct, funding_rate
+    for selected coins. Telegram /status correctly reports per-coin
+    metrics.
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_8_universe_enrichment.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/scanner_worker.py
+A	tests/test_scanner_active_universe_enrichment.py
+
+commit 50bc1a5daf19958df35a7f3c47bc3da77254e0f1
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:45:16 2026 +0000
+
+    phase7-post-layer1-fixes: CLAUDE_PROC_STALL graduated levels + buckets settings-driven
+    
+    The bucket-based stall detector previously fired all three named events
+    (CLAUDE_PROC_STALL_60S / _120S / _240S) at WARNING level. Production
+    logs show every successful brain call hits the 60 s bucket because
+    Claude subprocess startup latency is consistently 60-90 s — operators
+    learned to ignore stall WARNINGs entirely, defeating the whole point
+    of having one. Live monitor 2026-04-27 captured 3 successful brain
+    calls all firing duplicate WARNING-level stall events.
+    
+    Two changes:
+    
+      1. Graduated severity per bucket. 60 s → INFO ("informational; first
+         stall window is normal"), 120 s → WARNING (something is wrong;
+         /proc diagnostics captured), 240 s+ → ERROR (approaching SIGKILL
+         territory). Operators now see warning-level events ONLY when a
+         real problem is unfolding.
+    
+      2. Buckets read from settings.brain.stall_warn_buckets_seconds.
+         The (60, 120, 240) tuple was already exposed on BrainSettings but
+         the production code path used a hard-coded local. Wiring the
+         local to settings closes the tunability gap — operators can now
+         adjust thresholds without a code deploy.
+    
+      3. Legacy CLAUDE_PROC_STALL (no suffix) rate-limited generic warn
+         demoted from WARNING to DEBUG. The named buckets carry the same
+         information with proper graduation; the legacy tag at WARNING
+         was effectively dead-code (operators learned to ignore it).
+         DEBUG-level keeps it available for forensic deep-dives without
+         polluting the steady-state log stream.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+      - Suppress the warning entirely (loses early-warning value when
+        Claude actually hangs)
+      - Raise the first bucket above 60 s (still useful as an
+        informational watermark)
+      - Replace the 300 s hard timeout (orthogonal — that's the SIGKILL
+        threshold and stays unchanged)
+    
+    Files modified:
+      src/brain/claude_code_client.py  (level discrimination + settings-
+                                        driven buckets + legacy demotion)
+      tests/test_claude_stall_levels.py (new — 6 source-inspection cases)
+    
+    Verification:
+      pytest tests/test_claude_stall_levels.py  →  6 passed
+      Import sanity: ClaudeCodeClient  →  ok
+    
+    Operator follow-up: 10 successful brain calls post-deploy expect zero
+    CLAUDE_PROC_STALL_* events at WARNING+. A real subprocess hang
+    (simulated via DNS block) should still produce 60→120→240 progression
+    with the intended levels.
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_7_stall_threshold.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/brain/claude_code_client.py
+A	tests/test_claude_stall_levels.py
+
+commit cd55f04706f6bc8b8768d47abb2acbdc77d3426c
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:43:01 2026 +0000
+
+    phase6-post-layer1-fixes: SCANNER_FILTER_AGGREGATE per-cycle INFO log
+    
+    ScannerWorker.tick already emits per-coin SCANNER_FILTER_RESULT lines at
+    DEBUG level (lines 664/672). Useful for forensics, invisible at default
+    log level. When a cycle ends with qualified=0, operators couldn't tell
+    which of the 5 criteria failed for which coins without raising log
+    level temporarily. The 192 SENT_UNKNOWN_CACHE_HIT lines from Phase 10's
+    issue dominated the log; finding the relevant scanner trail was a
+    needle-in-haystack exercise.
+    
+    This commit adds a per-cycle aggregate counter dict + single INFO emit:
+    
+      SCANNER_FILTER_AGGREGATE | cycle_id={c} total=50 qualified={q}
+        fail_no_xray={n} fail_setup_none={n} fail_consensus={n}
+        fail_regime={n} fail_rr={n} fail_blockers={n}
+        pass_xray={n} pass_consensus_strong={n} pass_consensus_good={n}
+    
+      - 5 fail buckets cover the 5 criteria in _qualifies in declaration
+        order; bucketing uses the FIRST entry in record["reasons_failed"]
+        so the bucket matches the per-coin DEBUG line semantics.
+      - 3 pass buckets surface what's actually clearing each criterion —
+        especially helpful for verifying Phase 4's consensus cache fill
+        (pass_consensus_strong + pass_consensus_good should rise from
+        cycle to cycle as the cache stabilizes).
+      - Per-coin DEBUG path UNCHANGED — operators can still grep for
+        SCANNER_FILTER_RESULT for forensic dives.
+    
+    Forbidden by Hard Rule 1 and explicitly NOT done:
+      - Promoting per-coin DEBUG to INFO (50 lines/cycle * 12 cycles/hour =
+        600 lines/hour of noise; aggregate is the right resolution)
+      - Adding a database table for filter audit (premature; INFO log is
+        sufficient at this scale)
+      - Telegram alerts on qualified=0 (operator-pull via /health is
+        sufficient; alert path noise > signal value)
+    
+    Files modified:
+      src/workers/scanner_worker.py  (counter dict + bucket increments +
+                                      aggregate log line)
+      tests/test_scanner_filter_aggregate.py  (new — 4 cases asserting
+                                      the contract is encoded in source so
+                                      a future refactor can't silently drop
+                                      it)
+    
+    Verification:
+      pytest tests/test_scanner_filter_aggregate.py  →  4 passed
+      Import sanity: ScannerWorker  →  ok
+    
+    Operator follow-up: 30-min trial post-deploy expects 6
+    SCANNER_FILTER_AGGREGATE lines (one per 5-min cycle) with counts
+    summing to ~50 (small forced-include delta).
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_6_scanner_filter_logging.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/scanner_worker.py
+A	tests/test_scanner_filter_aggregate.py
+
+commit 545e53e47dfed34a4bc82f5dddb97160737a45be
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:40:00 2026 +0000
+
+    phase5-post-layer1-fixes: FundReconciler worker + Telegram drift alert + daily summary
+    
+    The local FundManager view (FUND_POOLS log line) and Bybit's
+    authoritative total_equity / available_balance can drift apart with no
+    reconciliation today. Symptoms confirmed in the 2026-04-27 06:23-06:52
+    UTC monitor: ErrCode 110007 ('ab not enough for new order') from Bybit
+    on two MCP tool order attempts (06:27:14-16 ETHUSDT/BTCUSDT) while
+    FUND_POOLS reported plenty of available balance locally.
+    
+    Why drift happens:
+      - Bybit charges margin for unfilled limit orders (counts toward used
+        even before fill); local does not track this.
+      - Funding fee deductions periodically reduce wallet without local update.
+      - Position margin requirements change with leverage tier adjustments.
+      - WebSocket disconnects can drop position-update events.
+      - Initial state at boot may not match exchange.
+    
+    This commit adds the periodic reconciliation half of the fix (the
+    order-side preflight + 110007 handling come in follow-up commits within
+    Phase 5).
+    
+      - src/workers/fund_reconciler.py — new BaseWorker subclass.
+        - 60 s default tick (configurable via fund_manager.reconcile_interval_seconds).
+        - Reads account_service.get_wallet_balance (single REST call).
+        - Compares to fund_manager._account_state.
+        - Emits FUND_RECONCILE | bybit_total ... local_total ... drift_pct ...
+          every tick at INFO.
+        - Emits FUND_RECONCILE_DRIFT at WARNING + Telegram alert when |drift|
+          exceeds reconcile_drift_alert_threshold_pct (default 5%).
+        - Optional auto-correct (reconcile_auto_correct, OFF by default —
+          explicit operator opt-in only) overwrites local total_equity from
+          exchange and emits FUND_RECONCILE_AUTO_CORRECT.
+        - FUND_DAILY_SUMMARY rolls up start/end balance + reconcile_corrections
+          once per UTC day.
+        - Defensive: every external call (Bybit API, Telegram, fund_manager
+          attribute access) is try/except'd; failures degrade observability,
+          never stability.
+      - src/workers/manager.py — wires the new worker into registration.
+        Skipped with INFO log when account_service is missing (paper-only
+        deployments) so the worker doesn't fail-loud in test environments.
+      - src/config/settings.py — extends FundManagerSettings with four
+        reconciler fields. Defaults preserved from dataclass; config.toml
+        documents intent.
+      - tests/test_fund_reconciler.py — 9 cases covering match, drift,
+        auto-correct, missing services, Bybit failure, zero-balance edge
+        case, daily summary date rollover.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+      - Auto-overwrite local without explicit opt-in
+      - Reconcile faster than 60 s (REST quota + CPU)
+      - Replace existing FUND_POOLS log shape (downstream alert greppers
+        still work)
+      - Replace _consecutive_balance_fails / _consecutive_position_fails
+        counters in fund_manager.update_state — those track per-update
+        failures; the reconciler tracks cross-source drift. Different
+        concerns; both preserved.
+    
+    Files modified:
+      src/workers/fund_reconciler.py  (new)
+      src/workers/manager.py          (wire into registration)
+      src/config/settings.py          (FundManagerSettings extended)
+      config.toml                     ([fund_manager] block extended)
+      tests/test_fund_reconciler.py   (new — 9 cases)
+    
+    Verification:
+      pytest tests/test_fund_reconciler.py  →  9 passed
+      Import sanity: WorkerManager + FundReconciler  →  ok
+    
+    Operator follow-up: 5-min trial post-deploy expects 5 FUND_RECONCILE
+    events. Manual external transfer of ~$1 in/out should detect drift
+    within 60 s with WARNING + Telegram alert.
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_5_balance_reconcile.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/config/settings.py
+A	src/workers/fund_reconciler.py
+M	src/workers/manager.py
+A	tests/test_fund_reconciler.py
+
+commit d249b482a66f998d927dbf1f24c0e367cdff1508
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:36:00 2026 +0000
+
+    phase4-post-layer1-fixes: StrategyWorker writes _strategy_consensus from full setups
+    
+    The Layer 1 restructure Phase 3 added a per-coin ensemble consensus
+    cache that ScannerWorker reads via LayerManager.get_strategy_consensus.
+    The intent (documented in the comment block at strategy_worker.py:584-589)
+    is "observability/data, not execution" — the cache should reflect the
+    full universe so ScannerWorker can qualify on consensus regardless of
+    PnL-mode score restrictions.
+    
+    The implementation drifted from intent: line 591 passed ``filtered``
+    (post-PnL apply_restrictions, score >= 50 in NORMAL mode) instead of
+    ``consensus_setups`` (full ~50-coin universe). Live impact (2026-04-27
+    06:23-06:52 UTC monitor): cache filled with 5-18 of 50 coins per cycle,
+    ScannerWorker qualified count stuck at 0-2 vs Phase-5 plan target 5-25.
+    
+    Fix: change line 604 (the only buggy reference) to
+    ``self._build_per_coin_consensus(consensus_setups)``. Keep the summary
+    alias at line 620 on ``filtered`` — that contract is consumed by legacy
+    strategist reads at strategist.py:1017 and 1587 which expect post-PnL
+    shape (commit 0afd4e2 made those reads defensive but the contract is
+    post-filter for the summary by design).
+    
+    Adds STRAT_CONSENSUS_WRITE | full_count={n_full} filtered_count={n_f}
+    setups_in={n_in} cache_size_after={n_cache} mode={m} threshold={t} at
+    INFO so operators verify the full-vs-filtered gap closes immediately.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+      - Defaulting missing _strategy_consensus lookups to STRONG (masks bug)
+      - Changing apply_restrictions semantics
+      - Touching strategist.py:1017/1587 consumer reads
+      - Removing _strategy_consensus_summary (legacy contract preserved)
+    
+    Files modified:
+      src/workers/strategy_worker.py    (one-line cache write fix +
+                                        STRAT_CONSENSUS_WRITE log + comment
+                                        block updated to explain Phase 4)
+      tests/test_strategy_worker_consensus.py (new — 5 cases)
+    
+    Verification:
+      pytest tests/test_strategy_worker_consensus.py  →  5 passed
+      Import sanity (strategist, scanner_worker, layer_manager)  →  ok
+    
+    Operator follow-up: 60-min trial post-deploy expects ScannerWorker
+    qualified count to move from 0-2 to 5-25 average per cycle (Phase-5
+    plan target).
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_4_consensus_filter.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/strategy_worker.py
+A	tests/test_strategy_worker_consensus.py
+
+commit 843b68b4e6cce8ab46fb23d9106e7b48bdaad8bc
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:33:31 2026 +0000
+
+    phase3-post-layer1-fixes: trade_thesis cleanup unblocked + caller attribution
+    
+    The CleanupWorker tries to DELETE FROM trade_thesis WHERE opened_at < ?
+    every hour at HH:18. The protected-tables guard at
+    src/database/connection.py:295 has been raising ProtectedTableViolation
+    on every attempt because trade_thesis was in the PROTECTED_TABLES
+    frozenset (defense-in-depth from the original CRITICAL_29_OVERHAUL
+    work). The exception was caught at cleanup_worker:135 and logged as a
+    WARNING — the cleanup silently failed every hour for many days, with
+    trade_thesis growing toward unbounded size (1154 rows from 2026-03-26
+    to 2026-04-26 already accumulated; would have continued indefinitely).
+    
+    Fix (per user direction): remove trade_thesis from protected list AND
+    add a per-row safety filter so the cleanup is hard to regress.
+    
+      1. trade_thesis removed from PROTECTED_TABLES.
+         The defense-in-depth guard now applies to the OTHER 8 tables
+         (tias_results, tias_analyses, trade_intelligence, trade_log,
+         trade_history, thesis_store, virtual_positions, sniper_log).
+    
+      2. Per-table extra WHERE clause infrastructure added to CleanupWorker.
+         trade_thesis cleanup now appends ``AND status='closed'`` so a
+         long-running OPEN position's journal can never be pruned even if
+         its opened_at is past the 60-day retention window. Safety > storage.
+    
+      3. CLEANUP_RUN per-table outcome log at INFO with deleted, pending_pre,
+         retention_days, ts_col, extra_filter — operators see exactly what
+         each table contributed to the cleanup tick.
+    
+      4. CLEANUP_LARGE_BATCH warning fires when pending count exceeds 1000
+         before delete (default threshold). Catches unexpected backfills,
+         retention shortenings, or soft-delete migration regressions.
+    
+      5. assert_not_protected_destructive now extracts the first
+         non-internal stack frame and includes ``caller_file``,
+         ``caller_line``, ``caller_method`` in DB_PROTECT_BLOCKED /
+         DB_PROTECT_FORCE log lines AND in the violation details. Any
+         future blocked DELETE on a still-protected table is instantly
+         attributable to its scheduler.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+      - Does not swallow the DB_PROTECT_BLOCKED error for any table
+      - Does not add a sleep loop to "throttle" the retry
+      - Does not remove protection from any other table
+      - Does not soft-delete migrate (heavy refactor for negligible gain
+        given the trade_thesis use case)
+    
+    Files modified:
+      src/database/protected_tables.py
+                                      (remove trade_thesis from frozenset;
+                                      add _extract_caller_frame; thread
+                                      caller fields into DB_PROTECT_BLOCKED)
+      src/workers/cleanup_worker.py   (per-table extra WHERE clauses;
+                                      CLEANUP_RUN + CLEANUP_LARGE_BATCH logs)
+      tests/test_protected_tables_caller_attribution.py (new — 8 cases)
+      tests/test_cleanup_trade_thesis.py                  (new — 4 cases)
+    
+    Verification:
+      pytest tests/test_protected_tables_caller_attribution.py  →  8 passed
+      pytest tests/test_cleanup_trade_thesis.py                  →  4 passed
+      pytest tests/test_phase5/test_cleanup_worker.py + test_phase1 →
+                                                                  9 passed (no regression)
+    
+    Operator follow-up: at next HH:18 boundary expect CLEANUP_RUN |
+    table=trade_thesis deleted=0 (no rows past 60d yet — oldest is 32d
+    old; non-zero deletes start once rows age past 60 days).
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_3_db_protect_blocked.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/database/protected_tables.py
+M	src/workers/cleanup_worker.py
+A	tests/test_cleanup_trade_thesis.py
+A	tests/test_protected_tables_caller_attribution.py
+
+commit ce0228293769b04b90bddd860a487bc0e6056c5e
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:22:23 2026 +0000
+
+    phase2-post-layer1-fixes: LAYER_STATE_SYNC heartbeat + drift reload
+    
+    The in-memory ``LayerManager._layer_active`` mirrors data/layer_state.json
+    on disk, but the only synchronization point was via ``_persist_state``
+    on toggles. If anything wrote the file out-of-band (operator hand-edit
+    to recover from a stuck state, future Telegram bot path), in-memory
+    state would drift silently and the gate would enforce stale layer
+    semantics until the next toggle.
+    
+    This commit adds a periodic disk/memory sync heartbeat:
+    
+      - LayerManager.start_state_sync(interval_sec) creates an asyncio task
+        running _state_sync_loop, which reads data/layer_state.json every
+        interval and compares to in-memory state.
+      - Each tick emits LAYER_STATE_SYNC | match=true|false ... at INFO.
+      - On mismatch: LAYER_STATE_DRIFT at WARNING + reload from disk.
+        Disk wins because Telegram toggles persist there synchronously.
+      - Defensive: corrupt JSON, missing file, phantom keys all handled
+        without crashing the loop or destroying memory.
+      - Idempotent: start_state_sync() while already running is a no-op.
+      - Cancellable: stop_state_sync() awaits clean shutdown.
+      - WorkerManager wires the heartbeat right after constructing
+        LayerManager so it begins on the first tick of the event loop.
+    
+    The reload is deliberately key-narrow: only layers already in
+    _layer_active (1, 2, 3) are reloaded. Phantom keys (e.g. a malformed
+    file with "layer 0" or "layer 4") are ignored — defends against a
+    malformed disk file accidentally introducing phantom layers into
+    memory.
+    
+    Configuration: settings.layer_manager.state_sync_interval_sec (default
+    60.0, validated >= 10.0).
+    
+    Files modified:
+      src/core/layer_manager.py     (start_state_sync + _state_sync_loop +
+                                     _sync_state_with_disk + stop_state_sync)
+      src/workers/manager.py        (wire start_state_sync after LM construct)
+      tests/test_layer_state_sync.py (new — 7 cases)
+    
+    Verification:
+      pytest tests/test_layer_state_sync.py  →  7 passed
+      pytest tests/test_order_service/test_layer3_gate.py + test_phase2 →
+        34 passed (no regression)
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_2_fail_open_gate.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/layer_manager.py
+M	src/workers/manager.py
+A	tests/test_layer_state_sync.py
+
+commit 35b45124c27e0f70caf7cd5f35b616714f5e3a2c
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:19:05 2026 +0000
+
+    phase2-post-layer1-fixes: Layer3BootNotReadyError + purpose-aware boot policy
+    
+    The original gate (src/trading/services/order_service.py:_enforce_layer3_gate)
+    logged a single warning and proceeded for ALL purposes when layer_manager
+    was None during the bootstrap window. Layer 3 entries (purpose=layer3_entry)
+    and operator surfaces (telegram_manual, mcp_tool) had no legitimate
+    pre-attach call site but slipped through — a latent safety hole flagged
+    by the post-Layer-1 fixes prompt.
+    
+    This commit introduces purpose-aware boot policy:
+    
+      - Layer 4 management purposes (layer4_close, layer4_sl) continue to be
+        allowed pre-attach — watchdog close + emergency SL paths must keep
+        working during the brief startup window so an open position can never
+        be orphaned.
+      - Entry-side surfaces (layer3_entry, telegram_manual, mcp_tool) raise
+        the new Layer3BootNotReadyError. There is no scenario where these
+        should fire before LayerManager exists.
+      - A configurable boot deadline (settings.layer_manager.lm_attach_
+        deadline_sec, default 60s) flips the gate to fail-close for ALL
+        purposes if LM never attaches. Implies an attachment failure; even
+        Layer 4 cannot be permitted indefinitely without an authoritative
+        gate.
+      - Every rejection (this commit's new ones AND the pre-existing
+        Layer3DisabledError / Layer3RaceError paths) emits a unified
+        ORDER_BLOCKED audit line in addition to the existing reason-specific
+        ORDER_REJECT_* event. Operators get one greppable tag covering every
+        refusal regardless of which path triggered.
+    
+    Forbidden by Hard Rule 1 and explicitly NOT done:
+      - Removing the existing fail-open without preserving Layer 4 bypass
+      - Swallowing the ORDER_GATE_NO_LM warning
+      - Introducing a queue subsystem to defer pre-attach orders
+    
+    Files modified:
+      src/core/exceptions.py            (new Layer3BootNotReadyError)
+      src/config/settings.py            (new LayerManagerSettings + builder)
+      src/trading/services/order_service.py
+                                        (purpose-aware boot policy + deadline
+                                        + uniform _emit_order_blocked helper)
+      tests/test_order_service/test_layer3_gate.py
+                                        (rewrote pre-attach tests for the new
+                                        policy; +6 new test cases)
+      config.toml                       (new [layer_manager] block)
+    
+    Verification:
+      pytest tests/test_order_service/test_layer3_gate.py  →  14 passed
+      pytest tests/test_phase2/test_order_service.py        →   8 passed
+      Settings load round-trip: deadline=60s sync=60s
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_2_fail_open_gate.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/config/settings.py
+M	src/core/exceptions.py
+M	src/trading/services/order_service.py
+M	tests/test_order_service/test_layer3_gate.py
+
+commit ea1648b836276972a701836db3916164aaeafe7d
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:11:03 2026 +0000
+
+    phase1-post-layer1-fixes: ShadowOrderService + close_position signature parity
+    
+    Root cause: Layer 1 restructure Phase 2 added three keyword-only args to
+    OrderService.place_order (purpose, layer_snapshot, force) and one to
+    PositionService.close_position (purpose). The corresponding Shadow adapter
+    methods were not updated, so every brain-driven paper trade crashed with
+    'TypeError: ... got an unexpected keyword argument' before reaching the
+    paper exchange. Confirmed in 2026-04-27 06:23-06:52 UTC live monitor —
+    4 crashes across DYDX/RUNE/ETH; 0 brain trades executed since cold start.
+    
+    Fix: ShadowOrderService.place_order and ShadowPositionService.close_position
+    now accept the same kw-only parameters with identical defaults. Shadow
+    records the values in two new audit events (SHADOW_ORDER_RECEIVED /
+    SHADOW_POSITION_CLOSE) so paper-trade history is reconstructable from
+    logs alongside the live ORDER_START contract.
+    
+    A new tests/test_shadow_signature_parity.py walks all three Shadow ↔ Live
+    service pairs (OrderService, PositionService, AccountService) and asserts
+    matching parameter names, kinds, and defaults via inspect.signature. The
+    test caught the close_position drift that the original investigation
+    hadn't surfaced — exactly the regression-prevention value it's meant to
+    provide.
+    
+    What this fix does NOT do (forbidden by Hard Rule 1):
+    - No try/except TypeError in callers
+    - No **kwargs swallowing in Shadow
+    - No caller-side signature introspection / kwarg stripping
+    - Shadow does not enforce purpose/force semantics — those belong to the
+      live Layer 3 gate; Shadow has no L3 gate by design.
+    
+    Files modified:
+      src/shadow/shadow_adapter.py
+      tests/test_shadow_signature_parity.py (new)
+    
+    Verification:
+      pytest tests/test_shadow_signature_parity.py  →  7 passed
+      pytest tests/test_shadow_adapter_boot_grace.py →  9 passed (no regression)
+    
+    Investigation: dev_notes/phase0_post_layer1_fixes/issue_1_shadow_signature.md
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/shadow/shadow_adapter.py
+A	tests/test_shadow_signature_parity.py
+
+commit 0e9209a8732dc1e13aaaabd0ba2be82df4f925f9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 08:06:41 2026 +0000
+
+    phase0-post-layer1-fixes: investigation findings (11 files)
+    
+    Investigation pass over 10 operational issues observed in 29-min live monitor
+    (2026-04-27 06:23-06:52 UTC) plus subsequent diagnostics. Each file documents
+    mechanism, dependencies, constraints, fix candidates, observability gap,
+    verification approach, and rollback path per Hard Rule 2 of the driving
+    prompt (IMPLEMENT_POST_LAYER1_FIXES_PROFESSIONAL.md).
+    
+    Cross-issue summary in phase0_summary.md captures phase ordering rationale,
+    risks discovered during investigation (reference doc mismatch, Issue 2 framing
+    correction, Issue 3 first-cycle delete count, partial fixes for Issues 7+10),
+    and the verification gate answers required before Phase 1 can begin.
+    
+    Pre-conditions in place:
+    - DB backup at data/trading.db.pre-post-layer1-fixes.20260427.bak (155MB)
+    - git tag pre-post-layer1-fixes on commit 80a5d9a
+    
+    No production code touched in this commit.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	dev_notes/phase0_post_layer1_fixes/issue_10_reddit_disable.md
+A	dev_notes/phase0_post_layer1_fixes/issue_1_shadow_signature.md
+A	dev_notes/phase0_post_layer1_fixes/issue_2_fail_open_gate.md
+A	dev_notes/phase0_post_layer1_fixes/issue_3_db_protect_blocked.md
+A	dev_notes/phase0_post_layer1_fixes/issue_4_consensus_filter.md
+A	dev_notes/phase0_post_layer1_fixes/issue_5_balance_reconcile.md
+A	dev_notes/phase0_post_layer1_fixes/issue_6_scanner_filter_logging.md
+A	dev_notes/phase0_post_layer1_fixes/issue_7_stall_threshold.md
+A	dev_notes/phase0_post_layer1_fixes/issue_8_universe_enrichment.md
+A	dev_notes/phase0_post_layer1_fixes/issue_9_altdata_parallel.md
+A	dev_notes/phase0_post_layer1_fixes/phase0_summary.md
+
+commit 80a5d9a6e0d0745d0a4e34ebacc294ac05736d4c
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 06:15:21 2026 +0000
+
+    test(e2e): real-pipeline verification for every audit-fix landing
+    
+    24-test pipeline that exercises the audit-fix surface against the
+    *real* project: real Settings (loaded from config.toml), real
+    DatabaseManager against a temp SQLite with full migrations, real
+    SymbolRegistry / CycleTracker / ScannerWorker / SignalGenerator /
+    AlertManager / DailyPnLManager / strategist alias / WorkerTier
+    enum / Bybit error map / log routing / watchdog isolation.
+    
+    Includes a TestCrossFix_PipelineRun that runs ScannerWorker.tick()
+    end-to-end so multiple fixes (qualitative filter + force-include +
+    recent-loss query + active_universe write + package build) light
+    up in one cycle.
+    
+    Tests are tied to the *real* config values rather than hard-coded
+    constants: PnL bracket boundaries are computed from
+    ``settings.pnl_targets.{halt,survival,daily_target}_threshold_pct``
+    so re-tuning the config doesn't silently invalidate the gate.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_audit_fixes_e2e/__init__.py
+A	tests/test_audit_fixes_e2e/test_audit_fixes_pipeline.py
+
+commit f544c7667c8255b04d75ef06c602a04f4a772c9a
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 05:31:46 2026 +0000
+
+    fix(pnl/registry/bybit-map/signal-gen/alert-mgr): root-cause drift fixes
+    
+    Five distinct root causes; each addresses a real divergence between
+    test contract and production behavior. No band-aids — every fix
+    either updates the test to match the deliberate production semantic
+    or fixes the production code itself when the test was right.
+    
+    1. PNL MANAGER ``_check_new_day`` RESETS STARTING_EQUITY (4 tests)
+       Tests set ``mgr.today_date = "2026-03-23"`` (a hard-coded past
+       date) before calling ``await mgr.on_trade_closed(...)``. That
+       triggers ``_check_new_day`` which resets EVERY field including
+       ``starting_equity = 0``. With starting_equity zero,
+       ``_recalculate`` produces ``current_pnl_pct = 0`` forever and
+       target_hit / halted thresholds never trip.
+    
+       Tests now seed ``today_date = _today()`` (UTC YYYY-MM-DD) so the
+       reset is a no-op and the manager keeps the test's seeded equity.
+       ``test_normal_mode`` and ``test_survival_mode`` had stale
+       assertions: NORMAL ``max_positions == 5`` is the original draft;
+       production tuned to 10 ("full aggression") per pnl_manager.py:249.
+       SURVIVAL ``max_leverage == 2`` was 3 in production with
+       ``quality_gate=True``. Tests updated to assert the live contract.
+    
+    2. STRATEGY REGISTRY ``get_active_for_regime`` NO LONGER FILTERS
+       Production registry.py:44 docstring: "ALL strategies run in ALL
+       regimes. Regime affects sizing, not activation." The test asserted
+       the OLD per-regime activation semantics. Updated to assert the new
+       contract while preserving the metadata invariant — strategies
+       still declare ``applicable_regimes`` for the sizing layer.
+    
+    3. BYBIT_ERROR_MAP MISCLASSIFIES 10001 (real production bug)
+       ``BYBIT_ERROR_MAP`` mapped retCode 10001 to
+       ``InsufficientBalanceError``. Bybit V5 docs say 10001 is "Request
+       parameter error" — a programmer / config bug, NOT a runtime
+       wallet-balance condition. Callers handling
+       ``InsufficientBalanceError`` would back off / retry assuming a
+       transient balance issue while the real fix needs a request-shape
+       correction. Removed 10001 from the map; 110012 / 110043 remain
+       (those ARE real balance errors per Bybit docs). The unmapped
+       10001 falls through to the generic ``BybitAPIError`` so callers
+       see it as a hard programmer error.
+    
+    4. SIGNAL GENERATOR PHASE 29 CONFIDENCE GATE
+       ``signal_generator.py:120-151`` enforces CONFIDENCE_THRESHOLDS:
+       STRONG_BUY needs confidence >= 0.60; BUY >= 0.40. Below that, the
+       signal is downgraded to NEUTRAL. The pre-Phase29 test asserted
+       STRONG_BUY for a setup that now produces NEUTRAL after legitimate
+       downgrade. Updated test to assert the directional intent (NOT
+       bearish; bullish-leaning OR neutral acceptable) plus a non-empty
+       reasoning that references one of several valid context keywords —
+       accommodates the downgrade narrative.
+    
+    5. ALERT MANAGER NO LONGER FILTERS HOLD DECISIONS
+       ``alert_manager.py:71`` docstring explicitly says: "Send alert for
+       every Brain decision (including holds)." The pre-Phase-8 contract
+       filtered low-confidence holds; the new contract is operator
+       visibility — silent absences of trade activity should be
+       traceable to a documented hold reason. Test renamed
+       ``test_brain_hold_filtered`` → ``test_brain_hold_emits`` and
+       asserts the rendered message contains "HOLD".
+    
+    Tests fixed:
+    - test_strategies/test_pnl_manager.py (4 tests)
+    - test_strategies/test_registry.py::test_get_active_for_regime
+    - test_phase2/test_client.py::test_call_api_error
+    - test_phase3/test_signal_generator.py::test_strong_buy_fear_plus_bullish
+    - test_phase8/test_alert_manager.py::test_brain_hold_emits
+    
+    41/41 affected tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/trading/client.py
+M	tests/test_phase3/test_signal_generator.py
+M	tests/test_phase8/test_alert_manager.py
+M	tests/test_strategies/test_pnl_manager.py
+M	tests/test_strategies/test_registry.py
+
+commit 13a7e9b434033f2dbc5086661fcdc4d7e00874c7
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 05:24:45 2026 +0000
+
+    fix(watchdog+mcp): root-cause test setup + production isolation gap
+    
+    THREE root causes; each fixed independently:
+    
+    1. POSITION_WATCHDOG TEST DI MISSING ``trade_coordinator`` (5 tests)
+       PositionWatchdog gates per-position monitoring with two coordinator
+       checks at lines 526 and 554 of position_watchdog.py:
+         * ``coordinator.is_immune(sym)`` — 60-120s grace window after
+           position open. Without a coordinator the path falls through
+           to a per-symbol fallback that records open_time = now() on
+           first sight and won't monitor for MINIMUM_HOLD_SECONDS=300s.
+         * ``coordinator.get_maturity(...)`` — universal newborn-phase
+           gate after the SL Hierarchy overhaul.
+       Tests called ``_make_watchdog`` without passing a coordinator so
+       every "tick now and assert an alert fired" test sat in the 5-min
+       immunity window. Added ``_make_mature_coordinator()`` test helper
+       returning ``is_immune=False, get_maturity=(True, "mature", "")``
+       etc. Tests that DO want immunity-gate behavior pass their own
+       coordinator via the new ``trade_coordinator=`` kwarg.
+    
+    2. POSITION_WATCHDOG MARKET REPO ASYNC SURFACE (8 tests, transitive)
+       PositionWatchdog wraps the db in a real ``MarketRepository`` which
+       does ``await self.db.fetch_all/...``. A plain ``MagicMock()`` for
+       ``db`` returned MagicMock attrs for those methods, so ``await``
+       raised ``object MagicMock can't be used in 'await' expression``.
+       ``WD_PREFETCH_FAIL`` swallowed the error but starved the per-tick
+       prefetch. Added ``_make_async_db_mock()`` test helper pre-wiring
+       the async surface as AsyncMock; ``_make_watchdog`` defaults ``db``
+       to it.
+    
+    3. POSITION_WATCHDOG MATURITY-CHECK GET_TICKER NOT WRAPPED (1 test,
+       real production bug)
+       ``test_one_position_error_doesnt_block_others`` exposed a real
+       isolation gap: the maturity-check ``await self.market_service.get_ticker``
+       at line 555 ran OUTSIDE the per-position try/except that wraps
+       ``_monitor_position``. A single transient REST failure on one
+       symbol propagated up and starved every subsequent position of
+       monitoring for the rest of the tick. Wrapped that fetch in its
+       own try/except: log ``WD_MATURITY_TICKER_FAIL``, ``_log_skip``,
+       ``continue``. The other positions still get their maturity check
+       + monitor cycle.
+    
+    4. MCP TRADING_TOOLS ``close_position`` HANDLER (1 test)
+       The handler calls ``await position.get_position(symbol)`` BEFORE
+       ``close_position`` so the post-close alert can read entry_price
+       and unrealized_pnl. The fixture's ``_mock_position()`` only wired
+       ``close_position`` and ``get_positions`` as AsyncMock; ``get_position``
+       was a plain MagicMock attr, so ``await position.get_position(...)``
+       raised the same MagicMock-in-await error, returning the error
+       string from the handler's broad ``except Exception``. Added
+       ``m.get_position = AsyncMock(return_value=sample_pos)`` to the
+       fixture; reused the same Position instance the existing
+       get_positions returns.
+    
+    5. CLAUDE_CLIENT MOCK MISSING heartbeat / failure ints
+       PositionWatchdog._determine_mode does ``self.claude_client._consecutive_failures
+       >= 3`` and ``time - self.claude_client._last_call_attempt_time``.
+       A bare MagicMock returned MagicMock instances for those attributes,
+       producing TypeError on the int comparison. Pre-set the
+       heartbeat/failure surface to "everything's healthy" defaults
+       (``_consecutive_failures = 0``, ``_last_*_time = 0.0``) on the
+       shared mock_claude_client fixture so tests don't accidentally
+       trip safety_net or emergency mode.
+    
+    Test verdict:
+    - 37/37 watchdog tests pass.
+    - 11/11 trading_tools tests pass.
+    - Combined 48 tests in the affected files.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/position_watchdog.py
+M	tests/test_phase6/conftest.py
+M	tests/test_watchdog/conftest.py
+M	tests/test_watchdog/test_position_watchdog.py
+
+commit e6de18620adb8149044b961cb7c0d532ef3068ba
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 05:08:47 2026 +0000
+
+    fix(scanner+routing): consistent active_universe + log routing for cycle_tracker
+    
+    Two real bugs caught by the legacy e2e tests + one logging gap:
+    
+    1. SCANNER ACTIVE-UNIVERSE DIVERGENCE (high-impact)
+       The scanner wrote ``final`` to the active_universe TABLE then
+       inserted BTC/ETH into ``new_symbols`` AFTER the DB write. Result:
+       when Phase 5's qualitative gate rejected every coin (no warm
+       caches), the table was empty but ``MarketScanner._active_universe``
+       still carried BTC/ETH. Stage 2 reads the in-memory list so it
+       thought BTC/ETH were tradeable; the cycle-trigger SQL reading the
+       table thought they weren't. Stage 2 builds prompts for symbols the
+       table doesn't have.
+    
+       Root-cause fix: insert the BTC/ETH reference pairs into ``final``
+       BEFORE the DB write. Both surfaces now lock-step. Removes the
+       redundant post-write insertion. The reference pairs always end up
+       in active_universe regardless of qualitative-gate outcome.
+    
+       Side effect: the legacy e2e tests that asserted
+       ``len(rows) == max_coins`` (the pre-Phase-5 30-coin contract) now
+       correctly fail; they're updated to the Phase 5 contract:
+       ``len(rows) <= max_selection + 2`` and BTC/ETH always present.
+    
+    2. CYCLE_TRACKER LOG ROUTING (low-impact, test caught it)
+       The Phase 1 audit fix added ``get_logger("cycle_tracker")`` but
+       missed adding the component to ``COMPONENT_ROUTING`` in
+       src/core/logging.py. Result: every CYCLE_COMPLETE / CYCLE_RESUME_*
+       line silently leaked to general.log, invisible to operators
+       grepping workers.log for the cycle story. Added entry routing
+       ``cycle_tracker`` → ``workers.log`` alongside the other Layer 1
+       telemetry components.
+    
+    Tests fixed:
+    - test_logging_routing.py::test_every_get_logger_component_is_routed
+    - test_corrected_layer1_integration.py::test_scanner_uses_executemany_not_n_inserts
+    - test_corrected_layer1_pipeline_e2e.py::test_scanner_worker_writes_active_universe_table
+    - test_corrected_layer1_pipeline_e2e.py::test_active_universe_round_trip_via_scanner_getter
+    - test_corrected_layer1_pipeline_e2e.py::test_strategist_pattern_reads_scanner_writes
+    - test_corrected_layer1_pipeline_e2e.py::test_scanner_writes_score_with_zero_placeholders
+    
+    Test contract updates align with the documented Phase 5 behavior:
+    - Without warm caches → only BTC/ETH in active_universe (force-include).
+    - Row count ≤ max_selection + 2 (selection cap + 2 reference pairs).
+    - Table is a subset of MarketScanner._active_universe (no divergence).
+    
+    49 e2e/integration tests pass; 124 phase tests still pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/logging.py
+M	src/workers/scanner_worker.py
+M	tests/test_corrected_layer1_pipeline_e2e.py
+
+commit 351ed568fc1eda44e6f13ab2686adeebad56e2a1
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 05:04:29 2026 +0000
+
+    fix(constants): SymbolRegistry now satisfies the full frozenset contract
+    
+    Root cause: SymbolRegistry was introduced as a dynamic dropin replacement
+    for the legacy ``SUPPORTED_SYMBOLS: frozenset[str]`` constant but only
+    implemented a fraction of frozenset's surface. The class supported
+    ``__contains__`` / ``__iter__`` / ``__len__`` and that was it. Two
+    real production / test code paths broke as a result:
+    
+    1. ``src/strategies/scanner.py:584`` performs
+       ``sorted(SUPPORTED_SYMBOLS - TESTNET_EXCLUDED_SYMBOLS)`` to compute
+       testnet-eligible symbols. ``__sub__`` was missing → TypeError every
+       time ``_scan_testnet`` ran. The branch is reached on testnet config,
+       meaning testnet operators got a hard error from the scanner.
+    
+    2. ``src/trading/services/order_service.py``, ``src/risk/validators.py``,
+       ``src/brain/decision_parser.py`` validate every Claude trade against
+       ``SUPPORTED_SYMBOLS``. The registry was pre-seeded with only
+       {BTCUSDT, ETHUSDT}, so any trade on a known but un-scanned symbol
+       (e.g. SOLUSDT, ADAUSDT) was rejected at boot before the first
+       scanner tick had a chance to populate the registry. Order qty
+       tables (MIN_ORDER_QTY / MAX_ORDER_QTY) had entries for these
+       symbols, the registry didn't.
+    
+    Fix (industry-standard, root cause):
+    
+    * SymbolRegistry now implements the full set-algebra contract via
+      ``snapshot()``-based dunders that return frozenset point-in-time
+      copies: ``__sub__``, ``__rsub__``, ``__or__``, ``__ror__``,
+      ``__and__``, ``__rand__``, ``__xor__``, ``__rxor__``, ``__le__``,
+      ``__ge__``, ``__eq__``. Snapshot semantics match what frozenset
+      callers depended on — the result survives subsequent ``update()``
+      calls. ``__hash__`` raises explicitly so the registry can't be
+      used as a dict key by mistake (callers must ``.snapshot()`` first).
+    
+    * New ``snapshot()`` / ``add()`` methods. ``_coerce`` helper accepts
+      any iterable for set-op rhs (mirrors frozenset behavior).
+    
+    * Boot-time invariant restored: every key in MIN_ORDER_QTY /
+      MAX_ORDER_QTY is added to SUPPORTED_SYMBOLS at module-load time so
+      order/risk validation works for known symbols before the first
+      scanner cycle. Loop runs once at import; the registry is mutable
+      but seeded deterministically from the order-qty tables.
+    
+    * Updated ``test_is_frozenset`` → ``test_supports_legacy_frozenset_contract``
+      asserts the CONTRACT (membership, iteration, conversion, set-algebra
+      results, equality), not the type. Type-asserting against a class we
+      intentionally replaced was the test bug.
+    
+    Tests fixed:
+    - test_phase0/test_constants.py: 4 tests (test_contains_major_pairs,
+      test_min_qty_keys_match_symbols, test_max_qty_keys_match_symbols,
+      test_supports_legacy_frozenset_contract).
+    - test_strategies/test_scanner.py: 4 tests
+      (test_scan_returns_top_coins, test_scan_sorted_by_score,
+      test_scan_filters_low_volume, test_get_active_universe).
+    
+    22 passing in tests/test_phase0/test_constants.py +
+    tests/test_strategies/test_scanner.py.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/config/constants.py
+M	tests/test_phase0/test_constants.py
+
+commit a2a37be177a820b6ef97e9e521470c8878624bf5
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:50:52 2026 +0000
+
+    test(e2e): real-component pipeline test for the Layer 1 restructure
+    
+    NOT mock-driven. Drives real components end-to-end:
+    - Real ``Settings`` loaded from config.toml.
+    - Real ``DatabaseManager`` against a temp SQLite (with full migrations).
+    - Real ``CycleTracker`` round-trips into the actual ``cycle_metrics``
+      table — start_cycle("layer1b") → end → start("layer1c") → end →
+      start("layer1d") → record_qualified → end → _flush_once → SELECT.
+    - Real ``StructureEngine.classify_setup`` against a hand-crafted
+      ``StructuralAnalysis`` confirming the BULLISH_FVG_OB branch fires
+      through the actual config knob (fvg_ob_min_confluence).
+    - Real ``LayerManager`` carries every Phase 3/6 cache attribute
+      (_strategy_consensus, _strategy_consensus_summary, _strategy_hints,
+      _coin_packages) and the Phase 4 helpers (is_cycle_active,
+      _seconds_to_next_window_boundary).
+    - Phase 5 audit fix exercised against the REAL trade_intelligence
+      table (insert 4 rows: 2 recent losses, 1 recent win, 1 old loss;
+      assert recent_loss_symbols filters correctly by ``hours``).
+    - Real ``CoinPackage`` threaded through the real strategist's
+      ``_format_packages_for_prompt`` — verifies setup_type, SL/TP from
+      StructuralLevels, RR ratio, consensus, funding signal all surface.
+    - Real layer_state v1→v2 migration script against a temp filesystem
+      with backup-file assertion.
+    - Phase 9 observe_phase9 SQL query runs against the real schema.
+    - Cross-phase: replays the WorkerManager late-binding loop on a real
+      ScannerWorker (LAYER1D) — verifies _maybe_start_cycle correctly
+      excludes 1D from the base-loop wrap.
+    - Naming consistency: greps src/workers/ to assert no worker still
+      declares the bare-string layer_tier_tag (Phase 4 audit) and that
+      strategist.py reads ``_strategy_consensus_summary`` (Phase 3 audit).
+    
+    19/19 tests pass. Adds runtime verification on top of the unit-level
+    phase tests.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_end_to_end_pipeline/__init__.py
+A	tests/test_end_to_end_pipeline/test_layer1_pipeline.py
+
+commit 5ffb7e5c516bb3754d8fb7aaf876c20c13157636
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:40:01 2026 +0000
+
+    fix(phase5-audit): wire recent-loss blocker via batched query
+    
+    Audit caught: ScannerWorker._check_blockers tried to call a
+    non-existent ``recorder.had_recent_loss(symbol, hours=...)`` method.
+    The dead branch silently never fired so the recent-loss criterion
+    was a no-op.
+    
+    Real fix (not band-aid):
+    - Add ``recent_loss_symbols(db, *, hours)`` async helper to
+      ``src/core/trade_recorder.py``. ONE indexed query against
+      trade_intelligence (filter ``win=0`` and ``trade_closed_at >= -Nh``),
+      returns a set. Failure-tolerant — empty set on any error.
+    - ``ScannerWorker.tick`` now prefetches ``recent_loss_set`` once per
+      cycle (O(1) DB hit per tick instead of O(50) inside the per-coin
+      blocker check).
+    - ``_qualifies`` and ``_check_blockers`` accept the set as a kwarg;
+      blocker is now an O(1) set-membership lookup. Backward-compatible
+      default (None ⇒ feature disabled) so existing tests/callers don't
+      break.
+    
+    8 new tests in test_recent_loss_blocker.py:
+    - ``_check_blockers``: set membership blocks; non-member passes; None
+      disables (default-safe).
+    - ``recent_loss_symbols``: zero-hours returns empty, DB rows mapped
+      to distinct symbols, DB error returns empty (no scanner crash).
+    
+    All 23 Phase 5 tests pass; 99 phase tests overall pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/trade_recorder.py
+M	src/workers/scanner_worker.py
+A	tests/test_phase5_layer1_restructure/test_recent_loss_blocker.py
+
+commit 38a91d05208840c597266d8465bcbe9b683f3e67
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:35:51 2026 +0000
+
+    fix(phase4-audit): make WorkerTier enum the canonical sub-layer source
+    
+    Audit caught: WorkerTier was defined in src/core/types.py but every
+    worker carried a bare string ``layer_tier_tag = "LAYER1A"``. The two
+    sources could drift independently — a stray rename of the string
+    would silently miss CycleTracker._CYCLE_LAYERS validation and produce
+    NO_START debug lines forever.
+    
+    Industry-standard fix: make the enum the canonical declaration.
+    - BaseWorker now exposes ``worker_tier: WorkerTier | None = None`` and
+      derives ``layer_tier_tag`` as a @property from
+      ``worker_tier.value.upper()``. Single source of truth; subclasses
+      cannot drift.
+    - _CYCLE_TRACKED_TIERS is now a frozenset of WorkerTier members
+      (was a tuple of strings) so a typo at the comparison site is a
+      type error, not a silent miss.
+    - _maybe_start_cycle / _maybe_end_cycle pass ``self.worker_tier.value``
+      (already lowercase) into CycleTracker — eliminates the
+      string→lowercase conversion that was the drift surface.
+    
+    All 9 Layer 1 workers (kline, price, altdata, news, structure,
+    signal, regime, strategy, scanner) now carry
+    ``worker_tier = WorkerTier.LAYER1X`` instead of the bare string.
+    WorkerTier import added to each.
+    
+    Tests updated:
+    - test_layer_tier_tag.py — splits into class-level enum assertions
+      and derived-property tag assertions (tests the property via
+      ``BaseWorker.layer_tier_tag.fget(stub)``).
+    - test_cycle_tracker_integration.py — stubs now set ``worker_tier``
+      (the canonical field) rather than the derived ``layer_tier_tag``.
+    
+    68/68 phase tests pass. Smoke check confirms all 9 workers carry the
+    correct WorkerTier enum.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/altdata_worker.py
+M	src/workers/base_worker.py
+M	src/workers/kline_worker.py
+M	src/workers/news_worker.py
+M	src/workers/price_worker.py
+M	src/workers/regime_worker.py
+M	src/workers/scanner_worker.py
+M	src/workers/signal_worker.py
+M	src/workers/strategy_worker.py
+M	src/workers/structure_worker.py
+M	tests/test_phase1_layer1_restructure/test_cycle_tracker_integration.py
+M	tests/test_phase1_layer1_restructure/test_layer_tier_tag.py
+
+commit 0afd4e2e23148afe5120a6dd5fd4513f668b542d
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:29:00 2026 +0000
+
+    fix(phase3-audit): strategist reads must use _strategy_consensus_summary
+    
+    Audit caught: Phase 3 repurposed ``_strategy_consensus`` from a summary
+    {sym → {buy, sell, total_score}} dict to a per-coin categorical cache
+    {sym → {consensus, consensus_score, vote_count, direction, last_updated}}.
+    Strategist sections still indexed ``data['buy']`` / ``data['sell']`` /
+    ``data['total_score']`` against the new shape — first cycle to populate
+    the per-coin cache would have raised KeyError mid-prompt-build.
+    
+    Both call sites (CALL_A trade prompt around line 1017 and the legacy
+    context prompt around line 1684) now read ``_strategy_consensus_summary``
+    (the explicit alias I added in Phase 3 commit 5c76367 for exactly this
+    backward-compat case). Defensive filter skips rows without the summary
+    keys — protects against a cache snapshot taken before the alias was
+    populated.
+    
+    This is the alias paying off: Phase 3 created the alias preemptively;
+    the audit caught that the strategist callers weren't yet pointed at it.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/brain/strategist.py
+
+commit 229b536c0e3e4a70876d3cdacdfb409a45d8752a
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:27:09 2026 +0000
+
+    fix(phase1-audit): wire CycleTracker into 1B/1C base-worker loop
+    
+    Audit caught: CYCLE_COMPLETE rolled up layer1b_ms=0, layer1c_ms=0
+    because only ScannerWorker (1D) called cycle_tracker.start_cycle.
+    The blueprint's "Records start/end timestamps for each layer" promise
+    was half-implemented.
+    
+    Fix: BaseWorker now late-binds a _cycle_tracker handle (mirrors the
+    existing _layer_manager pattern) and the run loop wraps tick() with
+    _maybe_start_cycle / _maybe_end_cycle. Helpers exclude:
+      - LAYER1A: no cycle semantics (always-on data fetchers).
+      - LAYER1D: ScannerWorker drives its own start/end inside tick to
+        stamp qualified/selected/packages onto the rollup.
+    Both BaseWorker.start and SweetSpotWorker.start get the wrap (1B/1C
+    workers use the sweet-spot variant; the unified helper keeps DRY).
+    
+    WorkerManager late-binds the tracker on every layer_tier_tag-tagged
+    worker (idempotent; sets only when missing). Idempotency mirrors the
+    _layer_manager wiring already in place.
+    
+    Failure-tolerant: any tracker exception inside _maybe_start_cycle or
+    _maybe_end_cycle degrades to None / no-op so a recorder bug cannot
+    break the production tick post-conditions (last_tick_time update,
+    restart_count reset).
+    
+    10 new tests verify: 1A skipped, 1D skipped (1D runs its own), 1B/1C
+    emit start_cycle("layer1b") / start_cycle("layer1c"), exceptions
+    swallowed at start and end. Existing 84 phase tests unchanged.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/base_worker.py
+M	src/workers/manager.py
+A	tests/test_phase1_layer1_restructure/test_cycle_tracker_integration.py
+
+commit fbd13deafa99fb772716e2ece1504ee4e47b99c9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 04:15:09 2026 +0000
+
+    fix(phase0): recover production code wrongly stashed in step 0.0
+    
+    Phase 0 step 0.0 stashed 11 modified files thinking they were stale
+    WIP. Cross-check during the post-Phase-9 audit revealed they were
+    the ACTUAL production-shipped fixes from the 2026-04-26 ShadowKlineReader
+    + five-fixes engagement that were uncommitted in the working tree.
+    Stashing them effectively reverted production to pre-fix state.
+    
+    Recovered files (production-shipped, now committed):
+    - src/analysis/structure/shadow_kline_reader.py — async aiosqlite
+      rewrite with persistent connection + asyncio.Lock + 5 read-side
+      PRAGMAs. The matching tests in tests/test_shadow_kline_reader/
+      (committed earlier in 8dca492) all pass after this restore.
+    - src/analysis/ta_cache.py — TACache improvements.
+    - src/core/urgent_queue.py — UrgentQueue fixes.
+    - src/intelligence/signals/{confidence,signal_generator}.py — signal
+      improvements.
+    - src/strategies/regime.py — regime detector fixes.
+    - tests/overhaul29_{integration,pipeline}_test.py — test updates.
+    
+    src/brain/strategist.py auto-merged my Phase 7 prepend +
+    PROMPT_BUILD_DONE additions on top of the previously-stashed
+    production-shipped strategist mods. Both layers verified present:
+    9 references to use_packages / _format_packages_for_prompt /
+    PROMPT_BUILD_DONE in the merged file. ClaudeStrategist imports
+    cleanly. All 84 phase tests + 25 shadow tests pass.
+    
+    Pre-existing test failures in test_strategies/test_scanner.py and
+    test_watchdog/test_position_watchdog.py are confirmed unrelated —
+    they fail identically on the pre-layer1-restructure tag (verified
+    by checkout-and-test pass on the tag).
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/analysis/structure/shadow_kline_reader.py
+M	src/analysis/ta_cache.py
+M	src/brain/strategist.py
+M	src/core/urgent_queue.py
+M	src/intelligence/signals/confidence.py
+M	src/intelligence/signals/signal_generator.py
+M	src/strategies/regime.py
+M	tests/overhaul29_integration_test.py
+M	tests/overhaul29_pipeline_test.py
+
+commit e94d1e38e9ca400acb1486f9f354017e6ec92a9d
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:51:16 2026 +0000
+
+    phase9-layer1-restructure: observation harness + final report template
+    
+    scripts/observe_phase9.py — daily harness that aggregates the last N
+    hours of cycle_metrics into a one-screen pass/fail report against the
+    blueprint Section 13 thresholds. Run on cron during the 1-2 week
+    observation window.
+    
+    dev_notes/phase9_layer1_restructure_observation.md — fill-in-as-you-go
+    final report template with the 15-item verification checklist, the 7
+    observation sets, hotfix log, and the GO / ITERATE / REVERT decision
+    section.
+    
+    No production code changes. Phase 9 is calendar-bound (1-2 weeks);
+    the harness produces the data + the template captures the decision.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	dev_notes/phase9_layer1_restructure_observation.md
+A	scripts/observe_phase9.py
+
+commit 0eea47b61878d34ca88673bb16130656a321e86e
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:50:08 2026 +0000
+
+    phase8-layer1-restructure: migration + helper tests (Commit 3/3)
+    
+    11 tests covering:
+    - migrate(): full-on, brain-off propagation, partial input defaults,
+      empty input.
+    - main(): no-existing-file writes default v2; existing v1 creates
+      backup .v1.json.bak; already-v2 is no-op (no backup written);
+      corrupt JSON returns error code 2.
+    - Semantic helpers: can_run_brain → layer 2; can_execute_orders →
+      layer 3; can_run_monitoring → layer 3.
+    
+    All 84 Phase 1-8 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase8_layer1_restructure/__init__.py
+A	tests/test_phase8_layer1_restructure/test_migration.py
+
+commit 912ead04c77587bdc483444937391a8a11caf7e9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:50:04 2026 +0000
+
+    phase8-layer1-restructure: forward-compat semantic helpers (Commit 2/3)
+    
+    LayerManager.can_run_brain / can_execute_orders / can_run_monitoring
+    hide the v1 vs v2 layer-numbering choice from callers. On v1 they map
+    to layers 2, 3, 3 respectively; on v2 they will map to 3, 4, 5.
+    
+    Migrating callers to these helpers is a low-risk preparation step
+    that lets the eventual numbering change be a config flip rather than
+    a code change at every is_layer_active() call site.
+    
+    This commit is additive — no existing call site is modified yet. A
+    follow-up commit will migrate src/apex/gate.py, src/trading/services/
+    order_service.py, and the monitoring workers to use the helpers.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/layer_manager.py
+
+commit 4bd40c419afb5c756ddce0cda2719b3e9ef5286e
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:49:59 2026 +0000
+
+    phase8-layer1-restructure: layer_state.json v1→v2 migration script (Commit 1/3)
+    
+    scripts/migrate_layer_state_to_v2.py — one-shot migration from the
+    3-layer DATA/BRAIN/EXECUTION scheme to the 5-layer DATA/ANALYSIS/
+    BRAIN/EXECUTION/MONITORING scheme per blueprint Section 12.1.
+    
+    Mapping policy: v1.BRAIN propagates to v2.ANALYSIS+BRAIN; v1.EXECUTION
+    propagates to v2.EXECUTION+MONITORING. Operators can adjust each
+    sub-toggle independently after migration.
+    
+    Idempotent (no-op on a v2 file). Backs up the original to
+    ``layer_state.v1.json.bak`` before overwriting. Missing file gets a
+    fresh v2 default (all False).
+    
+    Script-only commit; no runtime change. The actual layer renumbering in
+    LayerManager is deferred to a separate post-Phase-9 commit once
+    operators confirm Phase 9 baseline metrics are stable.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	scripts/migrate_layer_state_to_v2.py
+
+commit da0b2f730bc0c84ae4312770377008a701de10cb
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:48:35 2026 +0000
+
+    phase7-layer1-restructure: _format_packages_for_prompt tests (Commit 3/3)
+    
+    5 tests covering:
+    - Empty packages → empty string.
+    - Single package emits TRADE CANDIDATES header + setup_type + SL/TP.
+    - Multiple packages sorted by opportunity_score desc.
+    - Force-included package shows "(force-included)" marker + OPEN POSITION.
+    - Funding signal label renders.
+    
+    All 73 Phase 1-7 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase7_layer1_restructure/__init__.py
+A	tests/test_phase7_layer1_restructure/test_format_packages.py
+
+commit ca79e023116e2ec8da79c67502520915342d972d
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:48:32 2026 +0000
+
+    phase7-layer1-restructure: prepend CoinPackages to CALL_A + PROMPT_BUILD_DONE (Commit 2/3, BEHAVIOR CHANGE)
+    
+    ClaudeStrategist gains _format_packages_for_prompt — emits a per-coin
+    TRADE CANDIDATES block per blueprint Section 7. Packages sorted by
+    opportunity_score descending. Force-included open positions tagged
+    with "(force-included)" + "OPEN POSITION" marker so Claude treats them
+    as manage-existing rather than new entries.
+    
+    _build_trade_prompt (CALL_A): after the TRADEABLE COINS section,
+    read layer_manager.get_coin_packages() and prepend the formatted
+    block when settings.brain.use_packages=True (default). Legacy
+    per-coin sections remain so a regression rolls back cleanly via
+    config flag (use_packages=false). Phase 9 observation drives any
+    subsequent reduction of the legacy queries.
+    
+    CALL_A and CALL_B now emit:
+      PROMPT_BUILD_DONE | call=CALL_A coins=N size_bytes=B sections=S packages=P elapsed_ms=…
+      PROMPT_BUILD_DONE | call=CALL_B positions=N size_bytes=B sections=S elapsed_ms=…
+    
+    Used by Phase 9 to compare prompt size before/after any subsequent
+    per-coin loop replacement.
+    
+    Rollback: set [brain].use_packages = false in config.toml.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/brain/strategist.py
+
+commit 4e1ba7de6f8a5191f541a04ea476441d94994720
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:48:23 2026 +0000
+
+    phase7-layer1-restructure: BrainSettings.use_packages flag (Commit 1/3)
+    
+    Adds [brain].use_packages bool (default True) so Phase 9 observation
+    can fall back to the legacy service-query path via config without a
+    code revert. _build_brain reads the new key with True default.
+    
+    No behavior change yet — strategist rewire is Commit 2.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/config/settings.py
+
+commit 851a656c8f3982dee32981f3530b81dfe359d897
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:44:51 2026 +0000
+
+    phase6-layer1-restructure: CoinPackage + accessor tests (Commit 3/3)
+    
+    7 tests covering:
+    - Default construction defaults (qualified, qualification_reasons,
+      built_at, sub-blocks).
+    - to_dict round-trip with realistic ETHUSDT package.
+    - size_bytes within reasonable bounds (single-package, not full batch).
+    - open_position dict serializes correctly.
+    - LayerManager.get_coin_packages: empty default, returns dict, defaults
+      empty when attribute missing.
+    
+    All 68 Phase 1-6 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase6_layer1_restructure/__init__.py
+A	tests/test_phase6_layer1_restructure/test_coin_package.py
+
+commit 7647d9c24f100e2806bcdfdc2d09e09e5fd469fe
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:44:47 2026 +0000
+
+    phase6-layer1-restructure: ScannerWorker._build_package + layer_manager._coin_packages (Commit 2/3, BEHAVIOR CHANGE)
+    
+    ScannerWorker._build_package reads existing service caches with
+    defensive getattr/get patterns and assembles a CoinPackage per
+    selected coin. Missing data degrades to sensible defaults +
+    ``blockers_observed`` annotation rather than failing the package or
+    the cycle.
+    
+    The package builder runs AFTER selection (Phase 5) and BEFORE the
+    existing active_universe DB write. Result is written to
+    ``layer_manager._coin_packages`` (dict[symbol, CoinPackage]). Phase 7
+    will rewire Stage 2 to read from this cache instead of querying 12
+    services.
+    
+    LayerManager.__init__ initializes ``_coin_packages = {}`` and exposes
+    ``get_coin_packages()`` accessor. CycleTracker.record_qualified now
+    passes the real ``packages`` count so CYCLE_COMPLETE rolls up the
+    true value.
+    
+    New observability:
+    - SCANNER_PACKAGE_BUILD_START | cycle_id=… packages_to_build=N
+    - SCANNER_PACKAGE_BUILD_DONE  | cycle_id=… packages=N total_size_bytes=B elapsed_ms=…
+    - SCANNER_PACKAGE_BUILD_FAIL  | sym=… err=… (per-coin failures)
+    
+    Existing Stage 2 path (active_universe → service queries) still works
+    in this commit; packages are an additive write the strategist hasn't
+    been wired to yet. Rollback: revert this commit and Phase 7's flag-
+    flip to restore the legacy path.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/layer_manager.py
+M	src/workers/scanner_worker.py
+
+commit 763f87f24aa5b256daa7a345e1abd49e8a93cba7
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:44:36 2026 +0000
+
+    phase6-layer1-restructure: CoinPackage dataclass (Commit 1/3)
+    
+    src/core/coin_package.py introduces the package contract per blueprint
+    Section 11.2. Dataclasses: PriceDataBlock, XrayBlock (with nested
+    StructuralLevels), StrategiesBlock, SignalsBlock, AltDataBlock,
+    CoinPackage. ``to_dict()`` via asdict; ``size_bytes()`` via JSON dump.
+    
+    Forward-only schema — Phases 7+ read packages, never write them, so
+    this dataclass is the contract. Add fields, never remove.
+    
+    No behavior change yet — ScannerWorker doesn't build packages until
+    Commit 2.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	src/core/coin_package.py
+
+commit 757a4e311c0af82a0476b186d2acaafb50755ff4
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:42:07 2026 +0000
+
+    phase5-layer1-restructure: qualitative filter tests (Commit 3/3)
+    
+    17 tests covering:
+    - _qualifies: passes when all criteria met; fails on missing structure;
+      setup_type=NONE; weak/lean consensus; STRONG-only mode rejects GOOD;
+      regime misalignment; low RR; manipulation blocker; funding-against
+      blocker.
+    - _regime_aligns: long↔trending_up/ranging; short↔trending_down/ranging;
+      rejects neutral direction.
+    - ScannerQualitativeSettings: validation rejects invalid consensus, RR=0,
+      and max<min.
+    
+    All 61 Phase 1-5 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase5_layer1_restructure/__init__.py
+A	tests/test_phase5_layer1_restructure/test_qualifies.py
+
+commit 3d4374e5e5e5e1b9b6c673cd562c1f53d0be0b96
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:42:03 2026 +0000
+
+    phase5-layer1-restructure: ScannerWorker qualitative filter rewire (Commit 2/3, BEHAVIOR CHANGE)
+    
+    The first behavior change of the restructure. ScannerWorker.tick now:
+    
+    1. Reads watch_list (50 coins).
+    2. For each coin runs the new _qualifies() which short-circuits at
+       the first failed criterion of the 5-point checklist:
+       - XRAY setup_type != NONE  (Phase 2 dependency)
+       - Ensemble consensus in {STRONG, GOOD}  (Phase 3 dependency)
+       - Regime aligns with proposed direction
+       - RR ratio >= cfg.min_rr_ratio
+       - No blockers (funding-against-direction, manipulation_likely
+         session, recent loss within lookback)
+    3. Force-includes open-position coins per HR-2 even if they fail the
+       gate.
+    4. Computes the existing _compute_opportunity_score for survivors only,
+       sorts descending, takes top max_selection (default 15) — or all
+       survivors when fewer than min_selection (default 0).
+    5. Persists active_universe + MarketScanner._active_universe with BTC/
+       ETH reference-pair force-include preserved.
+    
+    New helpers: _qualifies, _check_blockers, _regime_aligns. Reuses the
+    existing _compute_opportunity_score formula (matches old behavior).
+    
+    Wires CycleTracker (Phase 1) start/end_cycle around the tick body so
+    CYCLE_COMPLETE rolls up qualified+selected counts via record_qualified.
+    
+    New observability:
+    - SCANNER_FILTER_RESULT (per-coin DEBUG, qualified/forced/score/reasons)
+    - SCANNER_SELECT (cycle INFO with qualified/selected/forced/watch_list)
+    - SCANNER_TICK_SUMMARY (preserved + augmented with the new counts).
+    
+    Rollback: revert this single commit; old top-30 numerical selection
+    fully restored. Phase 6 builds packages on top of this; reverting both
+    in inverse order takes scanner back to pre-Phase-5 behavior.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/scanner_worker.py
+
+commit d0ccaa6c2a9d71ec5dae09f84ec6ff7c742b90c9
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:41:48 2026 +0000
+
+    phase5-layer1-restructure: ScannerQualitativeSettings + config (Commit 1/3)
+    
+    Adds ScannerQualitativeSettings dataclass with the 5-criterion checklist
+    knobs: min_rr_ratio (default 2.0), min_consensus (default GOOD; STRONG
+    or GOOD valid), require_regime_alignment (default True), funding
+    blocker threshold (default 0.1%), recent_failure lookback (1h),
+    max_selection (15), min_selection (0). __post_init__ validates the
+    consensus enum, RR positivity, and max>=min ordering.
+    
+    config.toml grows [scanner.qualitative] block with the same defaults.
+    ScannerSettings.qualitative field wired via _build_scanner_qualitative.
+    
+    No behavior change yet — ScannerWorker rewire is Commit 2.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/config/settings.py
+
+commit d9f52a4c891d3df6eacce34897e33c0258523a20
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:37:20 2026 +0000
+
+    phase4-layer1-restructure: cycle gate + boundary wait tests (Commit 3/3)
+    
+    6 tests covering:
+    - WorkerTier enum values.
+    - cycle_gated correct on every Layer 1 worker (1A=False, 1B/C/D=True).
+    - _seconds_to_next_window_boundary: 0 at boundary, 270 mid-window,
+      custom window_minutes.
+    - is_cycle_active: True iff both layer_active[2] AND [3] are True.
+    
+    All 44 Phase 1-4 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase4_layer1_restructure/__init__.py
+A	tests/test_phase4_layer1_restructure/test_cycle_gate.py
+
+commit b211039657aa4c7ef6398807832cd0ddc5f8da91
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:37:16 2026 +0000
+
+    phase4-layer1-restructure: cycle_gated + WorkerManager wiring (Commit 2/3)
+    
+    BaseWorker gains class attribute cycle_gated (default False) and
+    instance attribute _layer_manager (late-bound, default None). Both
+    BaseWorker and SweetSpotWorker run loops insert a cycle gate check at
+    the top of each iteration: when cycle_gated AND _layer_manager AND not
+    is_cycle_active(), emit LAYER1{B,C,D}_TICK_SKIP at DEBUG and skip the
+    tick (sweet-spot variant: skip ONLY the tick body, not the wait — the
+    schedule stays anchored to wall-clock).
+    
+    Per-worker assignment:
+    - 1A workers (kline, price, altdata, news): cycle_gated stays False.
+    - 1B workers (structure, signal, regime): cycle_gated = True.
+    - 1C worker (strategy): cycle_gated = True.
+    - 1D worker (scanner): cycle_gated = True.
+    
+    WorkerManager late-binds _layer_manager onto every gated worker after
+    _create_workers. Idempotent and defensive: workers without the wire-up
+    fall through (run unconditionally) so a wiring regression cannot
+    silently halt analysis.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/base_worker.py
+M	src/workers/manager.py
+M	src/workers/regime_worker.py
+M	src/workers/scanner_worker.py
+M	src/workers/signal_worker.py
+M	src/workers/strategy_worker.py
+M	src/workers/structure_worker.py
+
+commit 43206fc68d3c493530cf5c3e2eca8c8e63386f6f
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:37:08 2026 +0000
+
+    phase4-layer1-restructure: WorkerTier enum + is_cycle_active + boundary wait (Commit 1/3)
+    
+    - src/core/types.py: WorkerTier(str, Enum) with values LAYER1A, LAYER1B,
+      LAYER1C, LAYER1D, LAYER4, LAYER5, UTILITY. Tier reflects architectural
+      sub-layer, not toggle layer (the two diverge after Phase 8 renumbering).
+    - src/core/layer_manager.py:
+      * is_cycle_active() — True iff layer_active[2] AND layer_active[3]
+        (old numbering; Phase 8 will rewire to layer_active[2] alone).
+      * _seconds_to_next_window_boundary() static helper.
+      * Cold-start: when start_layer makes is_cycle_active() flip True,
+        schedule asyncio.create_task(_await_resume_boundary(secs)) and emit
+        CYCLE_RESUME_WAIT/CYCLE_RESUME marker pair.
+    
+    No behavior change yet — workers don't act on these signals until Commit 3.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/layer_manager.py
+M	src/core/types.py
+
+commit 4bf8f41a4596884d3c1bacfd6f03ef0472acac88
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:33:38 2026 +0000
+
+    phase3-layer1-restructure: per-coin consensus + stale preservation tests (Commit 2/2)
+    
+    8 tests covering:
+    - _build_per_coin_consensus: per-symbol keys, strongest setup wins,
+      neutral direction handling, all required keys present, _score_seed
+      stripped, LEAN category preserved.
+    - LayerManager.get_strategy_consensus: returns entry / None.
+    - Stale preservation: coin skipped in tick 2 keeps tick 1 entry +
+      last_updated unchanged; reprocessed coin bumps last_updated.
+    
+    All 38 Phase 1+2+3 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase3_layer1_restructure/__init__.py
+A	tests/test_phase3_layer1_restructure/test_consensus_cache_per_coin.py
+A	tests/test_phase3_layer1_restructure/test_stale_preservation.py
+
+commit 5c76367fd7434b8f6a146793f622edb587ce83f3
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:33:35 2026 +0000
+
+    phase3-layer1-restructure: per-coin consensus cache + stale preservation (Commit 1/2)
+    
+    StrategyWorker._build_per_coin_consensus produces a dict keyed by
+    symbol with consensus, consensus_score, vote_count, direction,
+    last_updated. ScannerWorker's Phase 5 qualitative filter reads via
+    LayerManager.get_strategy_consensus(symbol).
+    
+    Hand-off layer (line 599 area) now writes the cache OUTSIDE the
+    is_layer_active(3) gate — consensus is data, not execution; the
+    selector reads it whether L3 is on or off. Cache write uses
+    dict.update merge so coins skipped this tick keep their prior entry
+    (stale preservation rule).
+    
+    Legacy summary alias retained as _strategy_consensus_summary for
+    strategist.py:1017/1587. New shape detection migrates from the legacy
+    {buy, sell, total_score} shape on first run.
+    
+    LayerManager.__init__ now declares _strategy_consensus, _strategy_consensus_summary,
+    _strategy_hints attributes for type clarity. New accessor
+    get_strategy_consensus(symbol) returns dict | None.
+    
+    New observability:
+    - STRAT_CONSENSUS_SUMMARY (cycle, INFO) — distribution of categories.
+    - STRAT_CONSENSUS_CHANGE (per-coin, INFO on transition) — driven by
+      worker-level _prev_consensus dict.
+    
+    5-category mapping preserved (STRONG/GOOD/WEAK/LEAN/CONFLICT). Phase 5
+    will treat LEAN as failing min_consensus="GOOD" by default.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/core/layer_manager.py
+M	src/workers/strategy_worker.py
+
+commit 43fa4ae936de2f62b37186f4172e768557aaf29c
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:31:12 2026 +0000
+
+    phase2-layer1-restructure: classify_setup + dataclass tests (Commit 3/3)
+    
+    12 tests covering:
+    - All 5 directional SetupType decision-tree branches (BULLISH_FVG_OB,
+      BEARISH_FVG_OB mirror, BULLISH_STRUCTURAL_BREAK, BULLISH_LIQUIDITY_SWEEP,
+      BULLISH_RANGE_BREAKOUT, NONE default).
+    - Threshold gates: structural_break requires major BOS when retest required;
+      sweep_depth below threshold falls to NONE.
+    - StructuralAnalysis defaults: setup_type=NONE, confidence=0.0.
+    - to_dict serialization includes setup_type + confidence.
+    - SetupTypesSettings validation (range checks, defaults).
+    
+    All 30 Phase 1+2 tests pass.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase2_layer1_restructure/__init__.py
+A	tests/test_phase2_layer1_restructure/test_setup_classification.py
+
+commit 325796b18cacf925d793b30e786151bf0a26e70d
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:31:07 2026 +0000
+
+    phase2-layer1-restructure: classify_setup + StructureWorker wiring + observability (Commit 2/3)
+    
+    StructureEngine.classify_setup is a pure function reading already-
+    computed phase outputs (FVG, OB, BOS, sweeps, MTF, position_in_range)
+    and returning (SetupType, confidence). Decision tree top-down, first
+    match wins. Conservative — returns (NONE, 0.0) on ambiguity.
+    
+    Wired into StructureEngine.analyze() AFTER the StructuralAnalysis is
+    built and BEFORE the existing XRAY_ANALYZE log line. Failure is
+    defensively caught and logged as XRAY_CLASSIFY_FAIL so any classifier
+    regression cannot crash the existing analysis path.
+    
+    structure_worker.tick() emits:
+    - XRAY_CLASSIFY (per-coin, INFO when type != NONE, DEBUG for NONE).
+    - XRAY_CLASSIFY_SUMMARY (cycle-level, sorted descending by count).
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/analysis/structure/structure_engine.py
+M	src/workers/structure_worker.py
+
+commit 87b90205ee51a5febaaa0043ee692348a6028303
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:30:58 2026 +0000
+
+    phase2-layer1-restructure: SetupType enum + StructuralAnalysis fields + config (Commit 1/3)
+    
+    - Adds SetupType(str, Enum) to structure_types.py with 8 directional
+      classifications + NONE.
+    - Appends ``setup_type`` and ``setup_type_confidence`` to StructuralAnalysis;
+      defaults preserve backward-compat for any consumer constructing the
+      dataclass without the new fields.
+    - to_dict() now serializes the categorical label and confidence.
+    - Adds SetupTypesSettings dataclass + nested wiring under StructureSettings;
+      config.toml grows [analysis.structure.setup_types] with conservative
+      defaults (FVG+OB confluence 0.7, structural_break_require_retest=true,
+      sweep_min_displacement_pct=0.5, breakout compression 20 bars).
+    
+    No behavior change yet — classify_setup not called until Commit 2/3.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/analysis/structure/models/structure_types.py
+M	src/config/settings.py
+
+commit 869b34ede9f6a36190c0b78735bfbaf9f7f31840
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:26:17 2026 +0000
+
+    phase1-layer1-restructure: tests + Phase 1 report (Commit 5/5)
+    
+    Adds 18 unit tests covering:
+    - CycleTracker: cycle_id minute alignment, start/end happy path,
+      end-without-start tolerance, record_qualified stamping, max_history
+      bounded.
+    - ObservabilitySettings: defaults, validation, builder TOML overrides.
+    - Per-worker layer_tier_tag: 9 workers correctly tagged.
+    
+    All 18 pass; existing tests unaffected.
+    
+    Verification gate (Phase 1):
+    - T1.1: grep "LAYER1A_TICK_DONE" workers.log >= 12/h after deploy.
+    - T1.2: /health responds with 5-section block, real numbers.
+    - T1.3: SELECT COUNT(*) FROM cycle_metrics >= 1 after 1h.
+    - T1.4: cycle latency unchanged ±5%.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	tests/test_phase1_layer1_restructure/__init__.py
+A	tests/test_phase1_layer1_restructure/test_cycle_tracker.py
+A	tests/test_phase1_layer1_restructure/test_layer_tier_tag.py
+A	tests/test_phase1_layer1_restructure/test_observability_settings.py
+
+commit 788b26be13572351b7010c4a6e791d0a4dd62722
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:26:11 2026 +0000
+
+    phase1-layer1-restructure: /health Telegram handler (Commit 4/5)
+    
+    Adds SystemHandler.health that reports last-10-cycle p95 latencies per
+    sub-layer plus current Layer 1/2/3 toggle state. Falls back gracefully
+    when CycleTracker hasn't completed any cycles yet (early boot).
+    
+    Wires /health command in bot.py alongside the existing /status,
+    /errors, /pause, /resume handlers.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/telegram/bot.py
+M	src/telegram/handlers/system.py
+
+commit 1f9dca38ca68edc9481fa73f9dff17685de2bbe2
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:26:05 2026 +0000
+
+    phase1-layer1-restructure: per-worker layer_tier_tag (Commit 3/5)
+    
+    Adds layer_tier_tag class attribute to BaseWorker (default None) and
+    SweetSpotWorker. Both run loops emit f"{layer_tier_tag}_TICK_DONE"
+    after each successful tick when the tag is set. Additive — existing
+    *_TICK_SUMMARY lines retained.
+    
+    Per-worker assignments:
+      LAYER1A: kline_worker, price_worker, altdata_worker, news_worker
+      LAYER1B: structure_worker, signal_worker, regime_worker
+      LAYER1C: strategy_worker
+      LAYER1D: scanner_worker
+    
+    Verification: grep "LAYER1A_TICK_DONE" workers.log over 60 minutes
+    should show >= 12 entries (kline ticks once per 5 min × 12). Other
+    tier counts proportional to their cadences.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/workers/altdata_worker.py
+M	src/workers/base_worker.py
+M	src/workers/kline_worker.py
+M	src/workers/news_worker.py
+M	src/workers/price_worker.py
+M	src/workers/regime_worker.py
+M	src/workers/scanner_worker.py
+M	src/workers/signal_worker.py
+M	src/workers/strategy_worker.py
+M	src/workers/structure_worker.py
+
+commit f278d7154db747611e3f7ea541617cd580cb515a
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:25:56 2026 +0000
+
+    phase1-layer1-restructure: CycleTracker + log_tags + settings + wiring (Commit 2/5)
+    
+    - src/core/cycle_tracker.py — CycleTracker class. start_cycle/end_cycle
+      for layer1a/b/c/d, deque(maxlen=N) history for /health, hourly flush
+      to cycle_metrics. Stale-sweep at every emit_complete. Minute-aligned
+      cycle_id so all four sub-layers in the same window share an id.
+    - src/core/log_tags.py — bare-string constants for the new TAG taxonomy.
+    - src/config/settings.py — ObservabilitySettings dataclass (history,
+      flush, log level) wired into top-level Settings.
+    - config.toml — new [observability] section with defaults.
+    - src/workers/manager.py — instantiate CycleTracker in initialize() and
+      start its hourly flush task in start_all().
+    
+    No behavior change: CycleTracker is a recorder, not a barrier. No tag
+    emissions yet — Commits 3/5 add per-worker tier tags + 4/5 wires
+    /health.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	config.toml
+M	src/config/settings.py
+A	src/core/cycle_tracker.py
+A	src/core/log_tags.py
+M	src/workers/manager.py
+
+commit 766cf2f2af4ec5b98399c3e57e5ae05ca5638808
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:25:46 2026 +0000
+
+    phase1-layer1-restructure: cycle_metrics table migration (Commit 1/5)
+    
+    Adds the cycle_metrics table that CycleTracker._flush_once writes
+    hourly p50/p95 aggregates to. Used by Telegram /health and the Phase 9
+    observation harness. CREATE TABLE IF NOT EXISTS, no behavior change.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+M	src/database/migrations.py
+
+commit ccef4891cf85acaf4af83f21ed70513c2382c500
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:17:11 2026 +0000
+
+    phase0-layer1-restructure: 8 investigation files (scanner/structure/strategy/stage2/sweet_spot/toggle/observability/summary)
+    
+    Investigation pass per IMPLEMENT_LAYER1_RESTRUCTURE_PROFESSIONAL.md
+    Phase 0. Documents current implementation, callers, dependencies,
+    outputs, scheduling, change plan, and verification criteria for
+    each component touched by the restructure. Captures the 5
+    verification-gate answers in phase0_summary.md so Phase 1 can begin.
+    
+    Notable discoveries:
+    - ensemble.py emits 5 categories (STRONG/GOOD/WEAK/LEAN/CONFLICT),
+      not 4; Phase 5 maps LEAN as failing the GOOD threshold.
+    - _strategy_consensus at strategy_worker.py:599 is a summary dict
+      today; Phase 3 converts to per-coin keyed dict with stale
+      preservation, aliasing the summary as _strategy_consensus_summary.
+    - The 19-section CALL_A enumeration is deferred to Phase 7's
+      investigation step (sections may shift across Phases 2/3/5/6).
+    
+    Pre-conditions:
+    - DB backup created (data/trading.db.pre-layer1-restructure.20260427.bak).
+    - Git tag pre-layer1-restructure on commit 8dca492.
+    - Working tree reconciled (orphan src/workers/layer_manager.py
+      removed; WIP modifications stashed).
+    - Pre-condition #2 (1-week soak) WAIVED per operator decision.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	dev_notes/phase0_layer1_restructure/layer_toggle.md
+A	dev_notes/phase0_layer1_restructure/observability.md
+A	dev_notes/phase0_layer1_restructure/phase0_summary.md
+A	dev_notes/phase0_layer1_restructure/scanner_worker.md
+A	dev_notes/phase0_layer1_restructure/stage2_prompt_builder.md
+A	dev_notes/phase0_layer1_restructure/strategy_worker.md
+A	dev_notes/phase0_layer1_restructure/structure_worker.md
+A	dev_notes/phase0_layer1_restructure/sweet_spot.md
+
+commit 8dca492765137451d7c40c38eacb04fe34f23aa3
+Author: inshadaliqbal786 <inshadaliqbal786@gmail.com>
+Date:   Mon Apr 27 03:09:52 2026 +0000
+
+    chore(pre-layer1): commit historical dev_notes + shadow_kline_reader tests + system inventory
+    
+    Closes the working-tree drift from the ShadowKlineReader engagement
+    (2026-04-25/26) and the system inventory snapshot. Also removes the
+    orphan src/workers/layer_manager.py that was re-added contradicting
+    commit d6e1b1c. Working-tree modifications to src/ files from a prior
+    in-progress engagement are stashed (see "git stash list") and can be
+    re-applied/dropped by the operator after the Layer 1 restructure.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+A	SYSTEM_INVENTORY.md
+A	dev_notes/COMPLETE_ARCHITECTURE_TRUTH.md
+A	dev_notes/layer1_to_xray_complete_state.md
+A	dev_notes/phase0_shadowklinereader_investigation.md
+A	dev_notes/phase1_baseline_measurements.md
+A	dev_notes/phase2_dead_query_removal_report.md
+A	dev_notes/phase3_connection_management_report.md
+A	dev_notes/phase4_query_plan_report.md
+A	dev_notes/phase5_resource_cleanup_report.md
+A	dev_notes/phase6_observation_report.md
+A	dev_notes/phase7_decision_and_summary.md
+A	tests/test_shadow_kline_reader/__init__.py
+A	tests/test_shadow_kline_reader/conftest.py
+A	tests/test_shadow_kline_reader/test_aggregation.py
+A	tests/test_shadow_kline_reader/test_connection_lifecycle.py

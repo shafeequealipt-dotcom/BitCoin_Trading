@@ -1,0 +1,30 @@
+357516e phase2-post-layer1-fixes: attach LayerManager to underlying OrderService through transformer (audit)
+78f3db3 phase2-post-layer1-fixes: cancel LAYER_STATE_SYNC heartbeat in stop_all (audit)
+06d6d94 phase7-post-layer1-fixes: thread stall buckets through ClaudeCodeClient kwarg (cross-check)
+7977fe4 phase10-post-layer1-fixes: REDDIT_DISABLED at WARNING + SENTIMENT_DEGRADED_MODE
+d225275 phase9-post-layer1-fixes: altdata per-feed timing + tick_slow threshold override
+229e61e phase8-post-layer1-fixes: active_universe enrichment from CoinPackage data
+50bc1a5 phase7-post-layer1-fixes: CLAUDE_PROC_STALL graduated levels + buckets settings-driven
+cd55f04 phase6-post-layer1-fixes: SCANNER_FILTER_AGGREGATE per-cycle INFO log
+545e53e phase5-post-layer1-fixes: FundReconciler worker + Telegram drift alert + daily summary
+d249b48 phase4-post-layer1-fixes: StrategyWorker writes _strategy_consensus from full setups
+843b68b phase3-post-layer1-fixes: trade_thesis cleanup unblocked + caller attribution
+ce02282 phase2-post-layer1-fixes: LAYER_STATE_SYNC heartbeat + drift reload
+35b4512 phase2-post-layer1-fixes: Layer3BootNotReadyError + purpose-aware boot policy
+ea1648b phase1-post-layer1-fixes: ShadowOrderService + close_position signature parity
+0e9209a phase0-post-layer1-fixes: investigation findings (11 files)
+80a5d9a test(e2e): real-pipeline verification for every audit-fix landing
+f544c76 fix(pnl/registry/bybit-map/signal-gen/alert-mgr): root-cause drift fixes
+13a7e9b fix(watchdog+mcp): root-cause test setup + production isolation gap
+e6de186 fix(scanner+routing): consistent active_universe + log routing for cycle_tracker
+351ed56 fix(constants): SymbolRegistry now satisfies the full frozenset contract
+a2a37be test(e2e): real-component pipeline test for the Layer 1 restructure
+5ffb7e5 fix(phase5-audit): wire recent-loss blocker via batched query
+38a91d0 fix(phase4-audit): make WorkerTier enum the canonical sub-layer source
+0afd4e2 fix(phase3-audit): strategist reads must use _strategy_consensus_summary
+229b536 fix(phase1-audit): wire CycleTracker into 1B/1C base-worker loop
+fbd13de fix(phase0): recover production code wrongly stashed in step 0.0
+e94d1e3 phase9-layer1-restructure: observation harness + final report template
+0eea47b phase8-layer1-restructure: migration + helper tests (Commit 3/3)
+912ead0 phase8-layer1-restructure: forward-compat semantic helpers (Commit 2/3)
+4bd40c4 phase8-layer1-restructure: layer_state.json v1→v2 migration script (Commit 1/3)
