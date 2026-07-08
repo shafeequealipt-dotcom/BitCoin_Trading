@@ -2407,6 +2407,34 @@ class WorkerManager:
 
             coordinator.register_close_callback(_pnl_close_callback)
 
+        # Telegram trade-close notification (every completed trade)
+        alert_mgr = self._services.get("alert_manager")
+        if alert_mgr and alert_mgr.enabled:
+            def _tg_close_callback(record):
+                import asyncio as _tg_aio
+                from src.core.types import Side as _Side
+                sym = record.get("symbol", "?")
+                try:
+                    side_str = record.get("direction", "")
+                    if not side_str:
+                        return
+                    _t = _tg_aio.get_event_loop().create_task(
+                        alert_mgr.send_position_closed_alert(
+                            symbol=sym,
+                            side=_Side(side_str),
+                            entry_price=record.get("entry_price", 0.0),
+                            exit_price=record.get("close_price", 0.0),
+                            pnl=record.get("pnl_usd", 0.0),
+                            pnl_pct=record.get("pnl_pct", 0.0),
+                        )
+                    )
+                    _t.add_done_callback(_close_cb_done("telegram", sym))
+                except Exception as e:
+                    log.warning(
+                        f"CLOSE_CB_FAIL | cb=telegram sym={sym} err='{str(e)[:150]}' | {ctx()}"
+                    )
+            coordinator.register_close_callback(_tg_close_callback)
+
             # F5 part 3 (2026-06-09 phantom-close follow-up): also register the
             # DailyPnLManager on the CORRECTION channel. Its running totals
             # accumulate on the close channel and persist/restore their own daily
