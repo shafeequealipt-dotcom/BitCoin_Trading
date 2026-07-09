@@ -3435,7 +3435,7 @@ fg_weight = 0.25
 funding_weight = 0.20
 oi_weight = 0.15
 strong_threshold = 0.55
-buy_threshold = 0.10
+buy_threshold = 0.05
 fg_normalize_range = 30.0
 funding_normalize = 0.005
 oi_normalize_pct = 5.0
@@ -3447,7 +3447,7 @@ oi_normalize_pct = 5.0
 # funding/OI/sentiment); F&G still informs the confidence magnitude. NEUTRALITY,
 # not a flip. Offline replay: 100% buy -> 32% buy / 51% sell / 17% neutral.
 # false = restore the prior contrarian-buy behaviour (off-switch).
-fg_direction_neutral = true
+fg_direction_neutral = false
 # Fix 1 (price-conditioned OI, 2026-06-10) — the OI direction component is
 # conditioned on the same-window price move. Rising OI on a FALLING price is
 # shorts piling in (BEARISH continuation), not longs accumulating (bullish); the
