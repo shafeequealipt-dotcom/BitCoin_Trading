@@ -19,7 +19,7 @@
 # stale "shadow" default did not affect runtime (the DB-persisted mode
 # wins via transformer_state.id=1) but was a recurring operator-
 # confusion source on cold-start audit reads.
-mode = "bybit_demo"
+mode = "shadow"
 # Shadow API URL (only used when mode = "shadow")
 shadow_api_url = "http://127.0.0.1:9090"
 # Timezone for display (internal always UTC)
