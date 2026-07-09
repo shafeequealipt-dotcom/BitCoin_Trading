@@ -2,8 +2,12 @@
 
 Uses OpenAI SDK with OpenRouter base URL so the existing OPENAI_API_KEY
 env-var works without an Anthropic API key.
+
+Implements ClaudeCodeClient-interface parity: send_message returns str,
+extract_json is available.
 """
 
+import json
 import os
 import time as _time
 
@@ -30,8 +34,9 @@ class ClaudeClient:
     and budget enforcement.
 
     Uses the existing OPENAI_API_KEY and routes to OpenRouter so the brain
-    can call Claude models (or any OpenRouter-supported model) without an
-    Anthropic API key.
+    can call LLM models without an Anthropic API key or the claude CLI.
+    Interface parity with ClaudeCodeClient: send_message returns str,
+    extract_json is available.
     """
 
     def __init__(self, settings: Settings, cost_tracker: CostTracker) -> None:
@@ -53,18 +58,22 @@ class ClaudeClient:
         self._last_call_time: float = 0.0
         self._last_response_time: float = 0.0
         self._consecutive_failures: int = 0
+        self._current_call: str | None = None
 
     @retry(max_attempts=2, delay=5.0, exceptions=(ClaudeAPIError,))
     @timed
-    async def send_message(self, prompt: str, system_prompt: str | None = None) -> dict:
-        """Send a message via OpenRouter and return the response with cost info.
+    async def send_message(self, prompt: str, system_prompt: str | None = None, **kwargs) -> str:
+        """Send a message via OpenRouter and return the raw response text.
+
+        Interface parity with ClaudeCodeClient.send_message: returns str
+        (the raw response text), accepts **kwargs for compatibility.
 
         Args:
             prompt: User message content.
             system_prompt: Optional system prompt.
 
         Returns:
-            Dict with text, tokens, cost, model, message_id.
+            Raw response text string.
 
         Raises:
             BrainError: If daily budget exceeded.
@@ -80,6 +89,7 @@ class ClaudeClient:
             messages.append({"role": "user", "content": prompt})
 
             self._last_call_time = _time.time()
+            self._current_call = prompt[:100]
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -93,6 +103,7 @@ class ClaudeClient:
 
             self._last_response_time = _time.time()
             self._consecutive_failures = 0
+            self._current_call = None
 
             choice = response.choices[0] if response.choices else None
             response_text = choice.message.content if choice else ""
@@ -110,14 +121,7 @@ class ClaudeClient:
                 inp=input_tokens, out=output_tokens, cost=cost,
             )
 
-            return {
-                "text": response_text,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": cost,
-                "model": response.model if hasattr(response, "model") else self.model,
-                "message_id": response.id if hasattr(response, "id") else "",
-            }
+            return response_text
 
         except OpenAIRateLimitError as e:
             self._consecutive_failures += 1
@@ -134,7 +138,34 @@ class ClaudeClient:
             self._consecutive_failures += 1
             raise ClaudeAPIError(f"Unexpected API error: {e}", details={"error": str(e)})
 
-    async def analyze_market(self, market_state: str, system_prompt: str) -> dict:
+    @staticmethod
+    def extract_json(raw_response: str) -> dict | None:
+        """Extract JSON from a raw response string.
+
+        Interface parity with ClaudeCodeClient.extract_json. Strips
+        markdown code fences and trailing commas, then parses JSON.
+        """
+        if not raw_response:
+            return None
+        text = raw_response.strip()
+        if text.startswith("```"):
+            end = text.find("\n", 3)
+            if end != -1:
+                text = text[end:].strip()
+            if text.endswith("```"):
+                text = text[:-3].strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        try:
+            start = text.index("{")
+            end = text.rindex("}") + 1
+            return json.loads(text[start:end])
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+    async def analyze_market(self, market_state: str, system_prompt: str) -> str:
         """High-level method: analyze market state.
 
         Args:
@@ -142,9 +173,13 @@ class ClaudeClient:
             system_prompt: System instructions.
 
         Returns:
-            Full response dict from send_message.
+            Raw response text.
         """
         return await self.send_message(market_state, system_prompt)
+
+    def cancel_current_call(self) -> None:
+        """Cancel any in-flight call — interface parity with ClaudeCodeClient."""
+        self._current_call = None
 
     def get_usage_stats(self) -> dict:
         """Get lifetime usage statistics."""

@@ -521,88 +521,16 @@ class WorkerManager:
                     f"(model={_brain_cfg.glm_model})"
                 )
             else:
-                from src.brain.claude_code_client import ClaudeCodeClient
+                from src.brain.claude_client import ClaudeClient
 
-                # Phase 2 (session-stability): moved timing knobs from hardcoded
-                # literals to BrainSettings so they can be tuned without a code
-                # change. Defaults preserve prior behaviour (300s timeout, 2
-                # retries, 2.0s min_interval) but the retry timeout-backoff base
-                # drops from 30→10, shrinking the brain-outage window on a
-                # single timeout from 5m to ~3m.
-                claude_client = ClaudeCodeClient(
-                    timeout_seconds=_brain_cfg.claude_cli_timeout_seconds,
-                    max_retries=_brain_cfg.claude_cli_max_retries,
-                    min_interval=_brain_cfg.claude_cli_min_interval,
-                    model=_brain_cfg.claude_cli_model,
-                    retry_timeout_backoff_base_seconds=(
-                        _brain_cfg.claude_cli_retry_timeout_backoff_base_seconds
-                    ),
-                    credential_refresh_margin_seconds=(
-                        _brain_cfg.credential_refresh_margin_seconds
-                    ),
-                    credential_refresh_max_attempts=(
-                        _brain_cfg.credential_refresh_max_attempts
-                    ),
-                    # Phase 7 (post-Layer-1 fix) — graduated stall-warning
-                    # bucket thresholds. Tuple is forwarded as-is; the
-                    # client coerces to floats and falls back to the legacy
-                    # (60, 120, 240) on malformed input.
-                    stall_warn_buckets_seconds=tuple(
-                        _brain_cfg.stall_warn_buckets_seconds
-                    ),
-                    # P2-1 (2026-05-13) — first-byte deadline. Bounds the
-                    # per-call stall blast radius independently of the total
-                    # timeout so a single slow Claude API streaming session
-                    # cannot block downstream workers for tens of minutes.
-                    # See BrainSettings.claude_cli_first_byte_timeout_seconds.
-                    first_byte_timeout_seconds=float(
-                        _brain_cfg.claude_cli_first_byte_timeout_seconds
-                    ),
-                    # P2-1 (2026-05-13) — prewarm pool tuning. Default 900 s
-                    # max_age covers the 5-10-min CALL_A cadence; legacy
-                    # 60 s gave 0 / 1424 hits. Stats interval gates the
-                    # CLAUDE_POOL_STATS emit cadence.
-                    prewarm_max_age_seconds=float(
-                        _brain_cfg.claude_cli_prewarm_max_age_seconds
-                    ),
-                    prewarm_stats_interval_seconds=float(
-                        _brain_cfg.claude_cli_prewarm_stats_interval_seconds
-                    ),
-                    # F28 (2026-06-05) — warm-pool canary TTL. Reuse is re-enabled but
-                    # gated on a periodic out-of-band canary so a CLI that starts
-                    # hanging parked workers self-disables the pool instead of
-                    # starving the brain.
-                    prewarm_canary_ttl_seconds=float(
-                        _brain_cfg.claude_cli_prewarm_canary_ttl_seconds
-                    ),
-                    # Issue 1 (latency, 2026-06-06) — CLI flags that cut the CALL_A
-                    # first-token thinking overhead (the warm pool is already on and
-                    # proven not to help). Each is config-gated and reverts cleanly.
-                    effort=_brain_cfg.claude_cli_effort,
-                    bare=_brain_cfg.claude_cli_bare,
-                    exclude_dynamic_system_prompt=(
-                        _brain_cfg.claude_cli_exclude_dynamic_system_prompt
-                    ),
+                claude_client = ClaudeClient(
+                    settings=self.settings,
+                    cost_tracker=cost_tracker,
                 )
                 self._services["claude_client"] = claude_client
-                log.info("Using Claude Code CLI client ($0 cost -- included in Max subscription)")
-                # System 1 (observability): push the centralized brain-capture gate
-                # into the client module (config is the boot-time source of truth;
-                # the legacy data/stage2_dumps/.enabled sentinel remains a live
-                # override) and emit the boot sentinel confirming capture is active.
-                try:
-                    from src.brain.claude_code_client import configure_brain_capture
-                    _obs = self.settings.observability
-                    configure_brain_capture(_obs.capture_brain_calls, _obs.capture_dir)
-                    log.info(
-                        f"BRAIN_CAPTURE_INIT | enabled={_obs.capture_brain_calls} "
-                        f"dir={_obs.capture_dir} retention_days={_obs.capture_retention_days} "
-                        f"max_files={_obs.capture_max_files} | {ctx()}"
-                    )
-                except Exception as _bce:
-                    log.warning(
-                        f"BRAIN_CAPTURE_INIT_FAIL | err='{str(_bce)[:120]}' | {ctx()}"
-                    )
+                log.info(
+                    f"Using OpenRouter API client (model={claude_client.model})"
+                )
         except Exception as e:
             log.warning("Brain services unavailable: {err}", err=str(e))
 
@@ -657,19 +585,8 @@ class WorkerManager:
         except Exception as e:
             log.warning("AlertManager unavailable: {err}", err=str(e))
 
-        # Wire Telegram alert callback into ClaudeCodeClient so it can notify
-        # the operator when OAuth auth fails and manual 'claude login' is needed.
-        try:
-            claude_client = self._services.get("claude_client")
-            alert_mgr = self._services.get("alert_manager")
-            if claude_client is not None and alert_mgr is not None:
-                async def _claude_auth_alert(msg: str) -> None:
-                    await alert_mgr.bot.send_message(msg, parse_mode="HTML")
-
-                claude_client.set_alert_callback(_claude_auth_alert)
-                log.info("ClaudeCodeClient: Telegram auth-alert callback wired")
-        except Exception as e:
-            log.warning("Could not wire Claude auth alert callback: {err}", err=str(e))
+        # OpenRouter-based brain client — no OAuth login needed, so no
+        # Telegram auth-alert callback (that was for ClaudeCodeClient CLI).
 
         # Risk Manager
         try:

@@ -1,1 +1,2 @@
 /opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python: can't open file '/Users/naash/Documents/Projects/StocK AGnet Ichapi/trading-intelligence-mcp/scripts/check_bot_health.py': [Errno 1] Operation not permitted
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python: can't open file '/Users/naash/Documents/Projects/StocK AGnet Ichapi/trading-intelligence-mcp/scripts/check_bot_health.py': [Errno 1] Operation not permitted
