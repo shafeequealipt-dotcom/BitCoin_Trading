@@ -267,7 +267,7 @@ use_claude_code = true
 # (default above) or "glm_cloudflare" (GLM-5.2 via Cloudflare Workers AI,
 # see src/brain/glm_client.py). Set back to "claude_code" to instantly
 # revert to the battle-tested Claude Code CLI path.
-provider = "glm_cloudflare"
+provider = "claude_code"
 glm_model = "@cf/zai-org/glm-5.2"
 # GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
 # before the final answer. max_tokens must cover both or content truncates

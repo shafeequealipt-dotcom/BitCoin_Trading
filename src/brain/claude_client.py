@@ -1,8 +1,18 @@
-"""Anthropic Claude API client wrapper with cost tracking and error handling."""
+"""OpenRouter API client wrapper with cost tracking and error handling.
 
+Uses OpenAI SDK with OpenRouter base URL so the existing OPENAI_API_KEY
+env-var works without an Anthropic API key.
+"""
+
+import os
 import time as _time
 
-import anthropic
+from openai import AsyncOpenAI
+from openai import (
+    RateLimitError as OpenAIRateLimitError,
+    APIConnectionError as OpenAIConnectionError,
+    APIError as OpenAIAPIError,
+)
 
 from src.config.settings import Settings
 from src.core.decorators import retry, timed
@@ -12,33 +22,34 @@ from src.brain.cost_tracker import CostTracker
 
 log = get_logger("brain")
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 
 class ClaudeClient:
-    """Wrapper around the Anthropic SDK with cost tracking and budget enforcement.
+    """Wrapper around OpenRouter API (OpenAI-compatible) with cost tracking
+    and budget enforcement.
 
-    Args:
-        settings: Application settings with brain.api_key and brain.model.
-        cost_tracker: CostTracker for budget enforcement.
+    Uses the existing OPENAI_API_KEY and routes to OpenRouter so the brain
+    can call Claude models (or any OpenRouter-supported model) without an
+    Anthropic API key.
     """
 
     def __init__(self, settings: Settings, cost_tracker: CostTracker) -> None:
         self.settings = settings
         self.cost_tracker = cost_tracker
-        api_key = settings.brain.api_key
+        api_key = settings.brain.api_key or os.environ.get("OPENAI_API_KEY", "")
         if not api_key:
-            log.warning("Anthropic API key not set — Brain will not function")
-        self.client = anthropic.AsyncAnthropic(api_key=api_key or "dummy")
+            log.warning("No API key set — Brain will not function")
+            api_key = "dummy"
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=OPENROUTER_BASE_URL,
+        )
         self.model = settings.brain.model
         self.max_tokens = settings.brain.max_tokens
         self.total_calls: int = 0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        # Phase 9a: watchdog heartbeat metrics. Watchdog consults these to
-        # decide whether Claude is alive. Both _last_call_time and
-        # _last_response_time are wall-clock timestamps:
-        #   _last_call_time       = start of the most recent API call
-        #   _last_response_time   = receipt of the most recent successful response
-        # Heartbeat uses max() of both so a long in-flight call counts as alive.
         self._last_call_time: float = 0.0
         self._last_response_time: float = 0.0
         self._consecutive_failures: int = 0
@@ -46,7 +57,7 @@ class ClaudeClient:
     @retry(max_attempts=2, delay=5.0, exceptions=(ClaudeAPIError,))
     @timed
     async def send_message(self, prompt: str, system_prompt: str | None = None) -> dict:
-        """Send a message to Claude and return the response with cost info.
+        """Send a message via OpenRouter and return the response with cost info.
 
         Args:
             prompt: User message content.
@@ -60,31 +71,33 @@ class ClaudeClient:
             ClaudeAPIError: On API errors.
         """
         if not self.cost_tracker.can_afford_call():
-            raise BrainError("Daily budget exceeded — cannot make Claude API call")
+            raise BrainError("Daily budget exceeded — cannot make API call")
 
         try:
-            kwargs: dict = {
-                "model": self.model,
-                "max_tokens": self.max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-            }
+            messages: list[dict] = []
             if system_prompt:
-                kwargs["system"] = system_prompt
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
 
-            # Heartbeat: record the CALL start before awaiting — so watchdog
-            # sees the client as alive during a long in-flight request.
             self._last_call_time = _time.time()
 
-            response = await self.client.messages.create(**kwargs)
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/shafeequealipt-dotcom/BitCoin_Trading",
+                    "X-Title": "Trading Bot Brain",
+                },
+            )
 
-            # Heartbeat: record the RESPONSE receipt on success; reset
-            # consecutive-failure counter.
             self._last_response_time = _time.time()
             self._consecutive_failures = 0
 
-            response_text = response.content[0].text if response.content else ""
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
+            choice = response.choices[0] if response.choices else None
+            response_text = choice.message.content if choice else ""
+            input_tokens = response.usage.prompt_tokens if response.usage else 0
+            output_tokens = response.usage.completion_tokens if response.usage else 0
 
             cost = self.cost_tracker.record_call(input_tokens, output_tokens)
 
@@ -93,7 +106,7 @@ class ClaudeClient:
             self.total_output_tokens += output_tokens
 
             log.info(
-                "Claude API call: {inp} in, {out} out, cost=${cost:.4f}",
+                "OpenRouter API call: {inp} in, {out} out, cost=${cost:.4f}",
                 inp=input_tokens, out=output_tokens, cost=cost,
             )
 
@@ -102,27 +115,27 @@ class ClaudeClient:
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "cost_usd": cost,
-                "model": response.model,
-                "message_id": response.id,
+                "model": response.model if hasattr(response, "model") else self.model,
+                "message_id": response.id if hasattr(response, "id") else "",
             }
 
-        except anthropic.RateLimitError as e:
+        except OpenAIRateLimitError as e:
             self._consecutive_failures += 1
-            raise ClaudeAPIError(f"Claude rate limited: {e}", details={"error": str(e)})
-        except anthropic.APIConnectionError as e:
+            raise ClaudeAPIError(f"API rate limited: {e}", details={"error": str(e)})
+        except OpenAIConnectionError as e:
             self._consecutive_failures += 1
-            raise ClaudeAPIError(f"Claude connection error: {e}", details={"error": str(e)})
-        except anthropic.APIError as e:
+            raise ClaudeAPIError(f"API connection error: {e}", details={"error": str(e)})
+        except OpenAIAPIError as e:
             self._consecutive_failures += 1
-            raise ClaudeAPIError(f"Claude API error: {e}", details={"error": str(e)})
+            raise ClaudeAPIError(f"API error: {e}", details={"error": str(e)})
         except BrainError:
             raise
         except Exception as e:
             self._consecutive_failures += 1
-            raise ClaudeAPIError(f"Unexpected Claude error: {e}", details={"error": str(e)})
+            raise ClaudeAPIError(f"Unexpected API error: {e}", details={"error": str(e)})
 
     async def analyze_market(self, market_state: str, system_prompt: str) -> dict:
-        """High-level method: analyze market state with Claude.
+        """High-level method: analyze market state.
 
         Args:
             market_state: Formatted prompt with market data.
