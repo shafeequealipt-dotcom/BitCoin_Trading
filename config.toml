@@ -3429,14 +3429,13 @@ on_drift_action = "rewrite_disk"
 [signal_generator.multi_source]
 sentiment_min_active = 0.05
 fg_min_active = 0.10
-funding_min_active = 0.10
-oi_min_active = 0.10
-sentiment_weight = 0.40
+funding_min_active = 0.05
+oi_min_active = 0.05
 fg_weight = 0.25
 funding_weight = 0.20
 oi_weight = 0.15
 strong_threshold = 0.55
-buy_threshold = 0.18
+buy_threshold = 0.10
 fg_normalize_range = 30.0
 funding_normalize = 0.005
 oi_normalize_pct = 5.0
