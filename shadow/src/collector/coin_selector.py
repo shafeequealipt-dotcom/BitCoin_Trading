@@ -2,6 +2,9 @@
 
 Uses Bybit's public REST API (no auth needed) via pybit. Runs synchronously
 wrapped in asyncio.to_thread() since it only executes at startup and daily.
+
+Force-included symbols (``FORCE_INCLUDE``) are always tracked regardless of
+volume rank — used to keep the shadow and trading-bot universes in sync.
 """
 
 import asyncio
@@ -14,6 +17,12 @@ from src.utils.config import ShadowConfig
 from src.utils.logging import get_logger
 
 log = get_logger("collector.coins")
+
+FORCE_INCLUDE: set[str] = {
+    "METAUSDT", "SPCXUSDT", "UNIUSDT", "MMTUSDT", "XPINUSDT",
+    "SYRUPUSDT", "XLMUSDT", "WIFUSDT", "WLDUSDT",
+    "AVGOUSDT", "SKLUSDT",
+}
 
 
 class CoinSelector:
@@ -97,7 +106,8 @@ class CoinSelector:
         """Save selected coins to tracked_coins table.
 
         New coins are inserted. Coins that fell out of the top N are
-        marked is_active=0 (not deleted — preserve history).
+        marked is_active=0 (not deleted — preserve history). Force-
+        included coins are unconditionally reactivated.
         """
         now = datetime.now(timezone.utc).isoformat()
 
@@ -108,6 +118,17 @@ class CoinSelector:
         params = [
             (symbol, now, rank + 1, 1)
             for rank, symbol in enumerate(symbols)
+        ]
+
+        # Ensure force-included coins are always tracked
+        all_active = list(symbols)
+        for sym in FORCE_INCLUDE:
+            if sym not in all_active:
+                all_active.append(sym)
+
+        params = [
+            (symbol, now, rank + 1, 1)
+            for rank, symbol in enumerate(all_active)
         ]
         await self._db.executemany(
             """INSERT INTO tracked_coins (symbol, added_at, rank_by_volume, is_active)
