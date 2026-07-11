@@ -453,7 +453,7 @@ analysis_interval = 900
 signal_triggered = true
 min_signal_confidence = 0.45
 max_calls_per_hour = 30
-model = "anthropic/claude-sonnet-4-20250514"
+model = "deepseek/deepseek-chat"
 max_tokens = 4096
 temperature = 0.3
 
