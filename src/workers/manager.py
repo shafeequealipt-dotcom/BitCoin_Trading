@@ -852,14 +852,14 @@ class WorkerManager:
         _min_sl_dist = float(getattr(_risk_cfg, "min_sl_distance_pct", 1.5))
         sl_validator = SLTPValidator(
             headspace_pct=2.5,
-            max_distance_pct=15.0,
+            max_distance_pct=25.0,
             min_sl_distance_pct=_min_sl_dist,
         )
         self._services["sl_validator"] = sl_validator
         # F37 boot sentinel — confirm the minimum-SL-distance clamp loaded.
         log.info(
             f"SLTP_MIN_DISTANCE_CONFIG | min_sl_distance_pct={_min_sl_dist:.2f} "
-            f"headspace_pct=2.5 max_distance_pct=15.0 | {ctx()}"
+            f"headspace_pct=2.5 max_distance_pct=25.0 | {ctx()}"
         )
         # Fix 7 boot sentinel — confirm the volatility-stop-scaling config loaded.
         _vss_cfg = getattr(_risk_cfg, "volatility_stop_scaling", None)
