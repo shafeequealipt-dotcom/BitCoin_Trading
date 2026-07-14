@@ -3503,7 +3503,7 @@ fail_below = 0.50
 warn_below = 0.85
 staleness_fail_seconds = 300.0
 
-# ── Entry Volume-Ratio Gate (2026-07-15, Phase 0 — observe-only) ────
+# ── Entry Volume-Ratio Gate (2026-07-15, Phase 1 — enforcing) ───────
 # A 371-trade VM analysis (2026-07-11..14) found volume_ratio at entry
 # (M5 current volume vs SMA) separates winners from losers: vr >= 0.4
 # kept +$49.31 net vs dropped -$71.17 on the baseline window, and the
@@ -3511,14 +3511,18 @@ staleness_fail_seconds = 300.0
 # within-symbol, threshold sensitivity, chronological halves). See
 # IMPLEMENT_ENTRY_VOLUME_GATE.md for the full evidence + phased plan.
 #
-# Phase 0 (this build): mode="observe" logs ENTRY_VOLUME_GATE with
-# would_block on every proposed trade but blocks nothing. Flip mode to
-# "enforce" only after a live counterfactual (same join against fresh
-# trade_intelligence rows) confirms the would-block cohort underperforms.
+# OPERATOR DECISION (2026-07-15): enforcing on first deploy, skipping the
+# plan's original live-counterfactual gate (observe >=3 days / >=200
+# trades before enforcing). This trades the extra safety margin for
+# speed — accepted risk is that the split is a one-window artifact.
+# min_volume_ratio started conservative (0.30, keeps ~57% of trades on
+# the baseline window) rather than the stronger 0.40 split, to reduce
+# the blast radius of that risk. Revert instantly by setting mode back
+# to "observe" (config-only, no redeploy needed beyond a worker restart).
 # min_volume_ratio = 0 is an instant kill switch even in enforce mode.
 [entry_volume_gate]
 enabled = true
-mode = "observe"
+mode = "enforce"
 min_volume_ratio = 0.30
 
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────

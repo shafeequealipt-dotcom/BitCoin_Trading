@@ -1,9 +1,9 @@
 # IMPLEMENT: Entry Volume-Ratio Gate
 
-> **Status:** Phase 0 IMPLEMENTED (observe-only, not yet enforcing) — see §7
+> **Status:** Phase 0 + Phase 1 IMPLEMENTED (config set to `mode="enforce"`), Phase 2 items 2-3 done — not yet deployed to the VM. See §7-§8.
 > **Date:** 2026-07-15
 > **Evidence base:** 371 closed shadow trades on the VM (`trade_intelligence`, 2026-07-11 → 2026-07-14, all pre-dating the R:R fix `d1b1561`)
-> **Depends on:** nothing. **Blocks:** Phase 1 (enforce) on the live counterfactual described in §4.
+> **Depends on:** nothing. **Blocks:** nothing — operator chose to enforce on first deploy rather than gate on a live counterfactual (see §8).
 
 ---
 
@@ -209,7 +209,54 @@ Shipped in observe-only mode. Files touched:
 
 **Verified:** `py_compile` on all touched files; `Settings._load_fresh("config.toml", ".env")` round-trips `entry_volume_gate.{enabled,mode,min_volume_ratio}` correctly from the real config; full test run (`test_entry_volume_gate.py`, `test_coin_package_validator.py`, `test_phase0/test_settings.py`, `test_strategy_worker_consensus.py`) — 36/36 pass, no regressions. Not yet verified live on the VM (deploy pending).
 
-**Not done yet (tracked for Phase 0 exit / Phase 1):**
-- Deploy to VM and confirm `ENTRY_VOLUME_GATE` lines appear in `workers.log`.
-- Let it run ≥3 days / ≥200 proposed trades, then run the live counterfactual (§4 exit criteria) before touching `mode`.
-- §6 Phase 2 items (threshold tuning, retention cron, `IDENTIFIED_ISSUES.md` correction, R:R fix measurement) remain open, unstarted.
+**Superseded by §8:** the "not done yet" list originally here (deploy, wait
+for the live counterfactual before enforcing) no longer applies — the
+operator directed completing Phase 1 and Phase 2 before any deploy. See §8.
+
+---
+
+## 8. Phase 1 + Phase 2 implementation record (2026-07-15)
+
+**Operator decision (Phase 1):** complete Phase 1 and Phase 2 in full before
+the first deploy, rather than the originally planned observe-then-confirm
+rollout. This means `mode="enforce"` ships on day one — the live
+counterfactual described in §4 (≥3 days / ≥200 observed trades confirming
+the would-block cohort underperforms) will NOT run before enforcement
+begins. This is a deliberate acceptance of one-window-validation risk made
+by the operator, documented here so it's auditable later. Mitigations kept
+in place:
+- Threshold set conservatively at **0.30**, not the stronger 0.40 split
+  the analysis found (0.30 keeps ~57% of the baseline window's trades;
+  0.40 keeps ~50%) — smaller blast radius if the split doesn't hold up.
+- Every gate evaluation still logs `ENTRY_VOLUME_GATE` with `would_block`
+  regardless of mode, so post-deploy the same live-counterfactual check
+  can run retroactively against real enforced-mode data.
+- Rollback is a single config line (`mode = "observe"`), no redeploy of
+  code required — only a worker restart to pick up the config change.
+
+`config.toml` `[entry_volume_gate]` updated: `mode = "observe"` → `"enforce"`.
+No other Phase 1 code changes were needed — `strategy_worker.py` already
+implemented the enforce path in Phase 0 (§7); flipping the mode was the
+entire remaining Phase 1 scope.
+
+**Phase 2 items completed:**
+
+| Item | What was done |
+|---|---|
+| **2. Trade-data retention cron** | Extended `scripts/daily_trade_export.py` (not a new job, per the plan) with `archive_full_table()` — dumps the complete `trade_log` + `trade_intelligence` tables to dated, immutable CSVs under `<out-dir>/archive/` on every run, plus `prune_old_archives()` (default 90-day retention, filename-date driven). New flags `--archive-retention-days` (default 90) and `--skip-archive`. This directly fixes the gap that made the June log bundle's loss unrecoverable — future entry-quality re-validations no longer depend on log files surviving rotation. Tested locally against `data/trading.db`: archive files created with correct full-column dumps for both tables; retention pruning verified to remove only date-expired files; `--skip-archive` verified to suppress the step. |
+| **Bonus fix found while touching this area** | `trading-export.service` and `trading-healthcheck.service` on the VM have been silently failing since 2026-07-13/14 — `scripts/daily_trade_export.py` and `scripts/check_bot_health.py` lost their executable bit in the 2026-07-08 deploy (`-rw-rw-r--`), so systemd's exec step failed with `Permission denied` on every scheduled run, with nothing surfacing the failure. Fixed with `chmod +x` on the VM directly (not a code change — a deployed-state repair). This means the archive extension above would have silently never run without this fix. |
+| **3. `IDENTIFIED_ISSUES.md` correction** | Corrected the `win_prob_near_certain` misdiagnosis (issue #18): it is the watchdog's calibrated near-certain-loser cut, not brain overconfidence — confirmed via `src/risk/time_decay_sl.py:98` and independently via `ENTRIES_QUALITY_DIAGNOSIS.md` Finding 2. Added issues #19-21 documenting the volume-ratio gate, the retention-cron fix, and the systemd permission-bit fix. Updated the "Open Issues" list to remove the resolved misdiagnosis and add the R:R-fix-measurement and gate-threshold-tuning follow-ups. File is now tracked in git for the first time (was previously untracked working output). |
+
+**Phase 2 items NOT completed (genuinely blocked, not skipped):**
+
+| Item | Why it's blocked |
+|---|---|
+| **1. Threshold tuning toward 0.4-0.5** | Requires live enforced-mode data to avoid compounding the one-window risk with a second round of threshold-mining on the same window. Deferred until post-deploy data exists. |
+| **4. R:R fix (`d1b1561`) live measurement** | Needs ~100 post-fix closed trades, which don't exist yet — nothing has traded since the fix landed and the system isn't deployed. Cannot be "completed" without live trading activity. Tracked in `IDENTIFIED_ISSUES.md` open issue #4 for the next session that has fresh trade data. |
+
+**Verification performed:** `py_compile` on `scripts/daily_trade_export.py`;
+local dry-run against `data/trading.db` producing correct archive CSVs;
+retention-pruning behavior verified with an artificially-aged file;
+`Settings._load_fresh` round-trips `mode="enforce"` correctly from the
+real `config.toml`. Not yet verified live on the VM — deploy is the next
+step.
