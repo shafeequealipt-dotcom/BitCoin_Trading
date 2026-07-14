@@ -5086,6 +5086,53 @@ class LossCuttingSettings:
 
 
 @dataclass
+class EntryVolumeGateSettings:
+    """Entry Volume-Ratio Gate (2026-07-15) — Phase 0, observe-only.
+
+    A 371-trade VM analysis (2026-07-11..14, ``trade_intelligence``) found
+    that ``volume_ratio`` at entry (current M5 volume vs its SMA) separates
+    winners from losers — the first entry-time feature to do so, after the
+    June diagnosis found none. ``vr >= 0.4`` split the book +$49.31 kept vs
+    -$71.17 dropped, and the effect survived five robustness checks
+    (per-day, leave-one-symbol-out, within-symbol, threshold sensitivity,
+    chronological halves). See IMPLEMENT_ENTRY_VOLUME_GATE.md for the full
+    evidence and phased rollout plan.
+
+    Phase 0 (this build) ships with ``mode="observe"``: every proposed
+    trade logs ``ENTRY_VOLUME_GATE`` with ``would_block``, but nothing is
+    ever skipped. Only after a live counterfactual (re-running the same
+    join against fresh ``trade_intelligence`` rows) confirms the
+    would-block cohort underperforms does Phase 1 flip ``mode`` to
+    "enforce". One 4-day window is not enough evidence to block real
+    trades without that live confirmation first.
+
+    Attributes:
+        enabled: Master switch for the gate machinery (observability +
+            enforcement). False = gate code path never runs.
+        mode: "observe" (log would_block, never skip) or "enforce"
+            (actually skip trades below the threshold).
+        min_volume_ratio: Trades with volume_ratio below this are
+            flagged/blocked. 0 = gate is a no-op even when enabled and in
+            enforce mode (instant kill switch without touching `enabled`).
+    """
+    enabled: bool = True
+    mode: str = "observe"
+    min_volume_ratio: float = 0.30
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("observe", "enforce"):
+            raise ValueError(
+                f"entry_volume_gate.mode must be 'observe' or 'enforce', "
+                f"got {self.mode!r}"
+            )
+        if self.min_volume_ratio < 0:
+            raise ValueError(
+                f"entry_volume_gate.min_volume_ratio must be >= 0, "
+                f"got {self.min_volume_ratio}"
+            )
+
+
+@dataclass
 class Settings:
     """Top-level settings container holding all sub-configurations."""
     general: GeneralSettings = field(default_factory=GeneralSettings)
@@ -5168,6 +5215,11 @@ class Settings:
     # Phase 5 (output-quality) — CoinPackage validator thresholds.
     coin_package_validator: CoinPackageValidatorSettings = field(
         default_factory=CoinPackageValidatorSettings,
+    )
+    # Entry Volume-Ratio Gate (2026-07-15) — Phase 0, observe-only. See
+    # EntryVolumeGateSettings docstring + IMPLEMENT_ENTRY_VOLUME_GATE.md.
+    entry_volume_gate: EntryVolumeGateSettings = field(
+        default_factory=EntryVolumeGateSettings,
     )
 
     _instance: "Settings | None" = field(default=None, init=False, repr=False)
@@ -5311,6 +5363,10 @@ class Settings:
         coin_package_validator_cfg = _build_coin_package_validator(
             toml_data.get("coin_package_validator", {}),
         )
+        # Entry Volume-Ratio Gate (2026-07-15) — Phase 0, observe-only.
+        entry_volume_gate_cfg = _build_entry_volume_gate(
+            toml_data.get("entry_volume_gate", {}),
+        )
 
         return cls(
             general=general,
@@ -5362,6 +5418,7 @@ class Settings:
             worker_liveness=worker_liveness_cfg,
             signal_generator=signal_generator_cfg,
             coin_package_validator=coin_package_validator_cfg,
+            entry_volume_gate=entry_volume_gate_cfg,
         )
 
     @classmethod
@@ -6615,6 +6672,22 @@ def _build_coin_package_validator(
         fail_below=float(data.get("fail_below", 0.50)),
         warn_below=float(data.get("warn_below", 0.85)),
         staleness_fail_seconds=float(data.get("staleness_fail_seconds", 300.0)),
+    )
+
+
+def _build_entry_volume_gate(data: dict[str, Any]) -> EntryVolumeGateSettings:
+    """Build EntryVolumeGateSettings from ``[entry_volume_gate]`` TOML section.
+
+    Phase 0 (2026-07-15). Filter pattern mirrors ``_build_loss_cutting`` —
+    unknown keys in TOML are silently ignored so the config can carry
+    forward-looking knobs. Defaults are defined on the dataclass.
+    """
+    return (
+        EntryVolumeGateSettings(
+            **{k: data[k] for k in data if hasattr(EntryVolumeGateSettings, k)}
+        )
+        if data
+        else EntryVolumeGateSettings()
     )
 
 

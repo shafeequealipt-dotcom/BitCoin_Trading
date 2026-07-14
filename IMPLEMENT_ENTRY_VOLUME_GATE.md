@@ -1,9 +1,9 @@
 # IMPLEMENT: Entry Volume-Ratio Gate
 
-> **Status:** PLANNED — not yet implemented
+> **Status:** Phase 0 IMPLEMENTED (observe-only, not yet enforcing) — see §7
 > **Date:** 2026-07-15
 > **Evidence base:** 371 closed shadow trades on the VM (`trade_intelligence`, 2026-07-11 → 2026-07-14, all pre-dating the R:R fix `d1b1561`)
-> **Depends on:** nothing. **Blocks:** nothing.
+> **Depends on:** nothing. **Blocks:** Phase 1 (enforce) on the live counterfactual described in §4.
 
 ---
 
@@ -192,3 +192,24 @@ No schema changes anywhere in this plan, so rollback is always config-only.
 
 **Session hygiene (per CLAUDE.md):** each phase lands as atomic commits direct to
 `main`, pushed same session. Analysis scripts stay in scratchpad — do not commit.
+
+---
+
+## 7. Phase 0 implementation record (2026-07-15)
+
+Shipped in observe-only mode. Files touched:
+
+| File | Change |
+|---|---|
+| `config.toml` | New `[entry_volume_gate]` section: `enabled=true`, `mode="observe"`, `min_volume_ratio=0.30` |
+| `src/config/settings.py` | New `EntryVolumeGateSettings` dataclass + `_build_entry_volume_gate()` builder, wired into `Settings` container and `_load_fresh()`, following the exact `LossCuttingSettings`/`_build_loss_cutting` pattern (unknown TOML keys silently ignored) |
+| `src/core/entry_volume_gate.py` (new) | Pure-function `evaluate_entry_volume_gate(volume_ratio, min_volume_ratio) -> VolumeGateResult`. No I/O, no service deps — mirrors the `coin_package_validator.py` precedent |
+| `src/workers/strategy_worker.py` | Gate check inserted in `_execute_claude_trade`, immediately after the `SLTPValidator.validate_pair` SKIP check (was line ~3184) and before the volatility-scaled-stop block. Reads `volume_ratio` via the shared TTL-cached `ta_cache.analyze(symbol, TimeFrame.M5, limit=100)` — same source the original analysis measured, and already called elsewhere in this function, so no added TA cost. Logs `ENTRY_VOLUME_GATE \| sym=... vr=... thr=... mode=... verdict=... would_block=... reason=...` on every proposed trade. In `mode="enforce"` (not yet active) a `would_block=True` verdict returns `(False, "entry_volume_gate_blocked")`, added to the function's documented reason-code enum |
+| `tests/test_entry_volume_gate.py` (new) | 7 tests: threshold pass/block boundary, fail-open on `None`, kill-switch at `min_volume_ratio<=0`, settings defaults, and `__post_init__` validation rejections |
+
+**Verified:** `py_compile` on all touched files; `Settings._load_fresh("config.toml", ".env")` round-trips `entry_volume_gate.{enabled,mode,min_volume_ratio}` correctly from the real config; full test run (`test_entry_volume_gate.py`, `test_coin_package_validator.py`, `test_phase0/test_settings.py`, `test_strategy_worker_consensus.py`) — 36/36 pass, no regressions. Not yet verified live on the VM (deploy pending).
+
+**Not done yet (tracked for Phase 0 exit / Phase 1):**
+- Deploy to VM and confirm `ENTRY_VOLUME_GATE` lines appear in `workers.log`.
+- Let it run ≥3 days / ≥200 proposed trades, then run the live counterfactual (§4 exit criteria) before touching `mode`.
+- §6 Phase 2 items (threshold tuning, retention cron, `IDENTIFIED_ISSUES.md` correction, R:R fix measurement) remain open, unstarted.

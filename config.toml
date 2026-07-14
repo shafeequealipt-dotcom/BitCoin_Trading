@@ -3503,6 +3503,24 @@ fail_below = 0.50
 warn_below = 0.85
 staleness_fail_seconds = 300.0
 
+# ── Entry Volume-Ratio Gate (2026-07-15, Phase 0 — observe-only) ────
+# A 371-trade VM analysis (2026-07-11..14) found volume_ratio at entry
+# (M5 current volume vs SMA) separates winners from losers: vr >= 0.4
+# kept +$49.31 net vs dropped -$71.17 on the baseline window, and the
+# split survived 5 robustness checks (per-day, leave-one-symbol-out,
+# within-symbol, threshold sensitivity, chronological halves). See
+# IMPLEMENT_ENTRY_VOLUME_GATE.md for the full evidence + phased plan.
+#
+# Phase 0 (this build): mode="observe" logs ENTRY_VOLUME_GATE with
+# would_block on every proposed trade but blocks nothing. Flip mode to
+# "enforce" only after a live counterfactual (same join against fresh
+# trade_intelligence rows) confirms the would-block cohort underperforms.
+# min_volume_ratio = 0 is an instant kill switch even in enforce mode.
+[entry_volume_gate]
+enabled = true
+mode = "observe"
+min_volume_ratio = 0.30
+
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
 # Watchdog probes the per-worker liveness tracker every interval and
 # emits WORKER_NEVER_TICKED / WORKER_TICK_OVERDUE warnings when a
