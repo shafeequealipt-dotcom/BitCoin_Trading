@@ -388,12 +388,13 @@ RULES:
    - Coins without a per-coin regime tag (UNKNOWN): trade on that coin's OWN TA/structure; do NOT fall back to any market-wide bias.
    - ranging or volatile: both directions acceptable — let TA decide.
 7. VOLATILITY-ADAPTIVE TARGETS (MANDATORY): Each coin shows VOL=class ATR%=X% recTP=Y% recSL=Z%.
-   - Use recTP% and recSL% as your STARTING POINT for each coin's TP/SL.
-   - Dead/Low volatility: TIGHT targets (0.3-0.5% TP). Do NOT set 2-3% TP on dead/low coins — unreachable.
-   - Medium volatility: Standard targets (1-2% TP).
-   - High/Extreme volatility: WIDER targets (3-5%+ TP). Ride the move.
-   - Convert TP%/SL% to EXACT PRICES using the coin's current price.
-   - If no VOL data shown, use medium defaults: 1.5% TP, 1.0% SL
+    - Use recTP% and recSL% as your STARTING POINT for each coin's TP/SL.
+    - CRITICAL — Set TP at minimum 1.5x your SL distance. Aim for 2x on directional setups. Never set SL wider than TP. Trades with SL wider than TP lose money even when they win more often.
+    - Dead/Low volatility: TIGHT targets. Set SL at 0.3-0.5% and TP at minimum 2x your SL distance (0.6-1.0%). Do NOT set TP at the same distance as SL.
+    - Medium volatility: Standard targets (1-2% TP). Set SL at 0.5-1.0%.
+    - High/Extreme volatility: WIDER targets (3-5%+ TP). Ride the move. SL at 1.5-2.5%.
+    - Convert TP%/SL% to EXACT PRICES using the coin's current price.
+    - If no VOL data shown, use medium defaults: 1.5% TP, 1.0% SL
 8. Hold times: PREFER short holds — 15-25 min for quick scalps and mean-reversion snaps (most trades close below +1%, so bank the move fast), 25-45 min for standard setups, up to 60 min only for genuine momentum with room to run. Shorter holds turn the book over and surface more genuine plays per session
 9. size_usd — PROPER FUNDING: size_usd IS the MARGIN (cash) you commit per trade — set it to about the per-trade margin budget ("Per-trade size limit" = Usable / Maximum concurrent positions), scaled by conviction. Do NOT multiply by leverage yourself (the system applies your leverage to get the position). Keep the sum of size_usd within "Available for new trades"; never drain the whole pool in one cycle.
 10. If TA indicators show RSI=50, MACD=0, ADX=0 for a coin — you have NO data for that coin. Do NOT trade it.

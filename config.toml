@@ -2144,12 +2144,12 @@ lock_offset_pct_old = 0.2
 # ladder_breakeven_lock_pct <= 0 to disable the floor entirely (arming at 0.2 then
 # locks nothing until a real rung, i.e. the pre-fix behaviour), or restore 0.5
 # here to revert the arm change alone.
-min_profit_to_arm_ladder_pct = 0.2
+min_profit_to_arm_ladder_pct = 0.4
 # PF/LC Top-15 Problem 2.4 — the Chandelier trail's activation threshold,
 # aligned to the ladder arm (0.2%) so the ladder and the trail coexist across
 # the full graduated band instead of the trail sitting idle in the 0.2-0.5%
 # band. Supersedes [mode4] min_profit_for_trail_pct (0.5), now deprecated.
-min_profit_for_trail_pct = 0.2
+min_profit_for_trail_pct = 0.4
 # Finding 6 (2026-06-02) — zero-crossing breakeven floor. The arm threshold
 # (0.5%) sits below the first step rung (step_young 0.6%), so a modest peak in
 # [arm, first_step) used to arm the ladder but lock nothing, and a +0.59% peak

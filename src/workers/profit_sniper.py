@@ -50,7 +50,7 @@ REGIME_TRAIL_FACTORS: dict[str, float] = {
     "trending": 1.3,   # Wider — let trends run
     "ranging": 0.7,    # Tighter — reversion likely
     "volatile": 1.0,   # Standard — volatility already in ATR
-    "dead": 0.6,       # Tightest — no momentum, protect gains
+    "dead": 0.85,      # Tighter — no momentum, modest protection
     "balanced": 0.85,  # Conservative — uncertain regime
 }
 
