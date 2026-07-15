@@ -3210,40 +3210,17 @@ class StrategyWorker(SweetSpotWorker):
                         _evg_volume_ratio = (_evg_ta.get("volume") or {}).get(
                             "volume_sma_ratio",
                         )
-                        # TEMP DIAGNOSTIC (2026-07-15) — remove once the
-                        # live vr=NA-always root cause is found. Isolated
-                        # reproduction of this exact TACache.analyze() call
-                        # returns real volume_sma_ratio values; the live
-                        # process has returned None on 40/40 evaluations
-                        # with no exception raised. Dumping the raw shape
-                        # to see what actually comes back in-process.
-                        if _evg_volume_ratio is None:
-                            log.warning(
-                                f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
-                                f"ta_keys={sorted(_evg_ta.keys())} "
-                                f"volume_block={_evg_ta.get('volume')} "
-                                f"cache_type={type(_evg_ta_cache).__name__} "
-                                f"candles_analyzed={_evg_ta.get('candles_analyzed')} "
-                                f"| {ctx()}"
-                            )
-                    else:
-                        log.warning(
-                            f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
-                            f"_evg_ta_falsy=True cache_type={type(_evg_ta_cache).__name__} "
-                            f"| {ctx()}"
-                        )
-                else:
-                    log.warning(
-                        f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
-                        f"ta_cache_service_missing=True | {ctx()}"
-                    )
             except Exception as _evg_exc:
                 # WARNING not debug: this exception decides whether the gate
                 # ever sees a real volume_ratio. At log_level=INFO a debug
-                # line here is invisible, so a live bug in this path (e.g.
-                # 2026-07-15 deploy: every evaluation silently fell back to
-                # fail-open for hours) produces no signal that anything is
-                # wrong — the gate just looks permanently disabled.
+                # line here would be invisible, so a future bug in this path
+                # would again produce zero diagnostic signal (2026-07-15: a
+                # local `from src.core.types import TimeFrame` re-import
+                # later in this same function shadowed the module-level
+                # TimeFrame for the whole function scope, making every
+                # reference before that line raise UnboundLocalError — fixed
+                # by removing the redundant local imports; kept at WARNING
+                # so a regression like it is never silent again).
                 log.warning(
                     f"ENTRY_VOLUME_GATE_TA_FETCH_FAIL | sym={symbol} "
                     f"err_type={type(_evg_exc).__name__} "
@@ -3474,7 +3451,6 @@ class StrategyWorker(SweetSpotWorker):
         try:
             _ta_cache_for_t23 = self.services.get("ta_cache") or self.services.get("ta")
             if _ta_cache_for_t23 is not None:
-                from src.core.types import TimeFrame
                 _ta_for_t23 = await _ta_cache_for_t23.analyze(
                     symbol=symbol, timeframe=TimeFrame.M5, limit=100,
                 )
@@ -3829,7 +3805,6 @@ class StrategyWorker(SweetSpotWorker):
         try:
             _ta_cache = self.services.get("ta_cache") or self.services.get("ta")
             if _ta_cache:
-                from src.core.types import TimeFrame
                 _ta_entry = await _ta_cache.analyze(symbol=symbol, timeframe=TimeFrame.M5, limit=100)
                 if _ta_entry:
                     _entry_rsi = (_ta_entry.get("momentum") or {}).get("rsi_14")
