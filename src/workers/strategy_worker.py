@@ -3211,9 +3211,16 @@ class StrategyWorker(SweetSpotWorker):
                             "volume_sma_ratio",
                         )
             except Exception as _evg_exc:
-                log.debug(
+                # WARNING not debug: this exception decides whether the gate
+                # ever sees a real volume_ratio. At log_level=INFO a debug
+                # line here is invisible, so a live bug in this path (e.g.
+                # 2026-07-15 deploy: every evaluation silently fell back to
+                # fail-open for hours) produces no signal that anything is
+                # wrong — the gate just looks permanently disabled.
+                log.warning(
                     f"ENTRY_VOLUME_GATE_TA_FETCH_FAIL | sym={symbol} "
-                    f"err='{str(_evg_exc)[:80]}' | {ctx()}"
+                    f"err_type={type(_evg_exc).__name__} "
+                    f"err='{str(_evg_exc)[:200]}' | {ctx()}"
                 )
 
             _evg_result = evaluate_entry_volume_gate(
