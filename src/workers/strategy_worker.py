@@ -3210,6 +3210,33 @@ class StrategyWorker(SweetSpotWorker):
                         _evg_volume_ratio = (_evg_ta.get("volume") or {}).get(
                             "volume_sma_ratio",
                         )
+                        # TEMP DIAGNOSTIC (2026-07-15) — remove once the
+                        # live vr=NA-always root cause is found. Isolated
+                        # reproduction of this exact TACache.analyze() call
+                        # returns real volume_sma_ratio values; the live
+                        # process has returned None on 40/40 evaluations
+                        # with no exception raised. Dumping the raw shape
+                        # to see what actually comes back in-process.
+                        if _evg_volume_ratio is None:
+                            log.warning(
+                                f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
+                                f"ta_keys={sorted(_evg_ta.keys())} "
+                                f"volume_block={_evg_ta.get('volume')} "
+                                f"cache_type={type(_evg_ta_cache).__name__} "
+                                f"candles_analyzed={_evg_ta.get('candles_analyzed')} "
+                                f"| {ctx()}"
+                            )
+                    else:
+                        log.warning(
+                            f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
+                            f"_evg_ta_falsy=True cache_type={type(_evg_ta_cache).__name__} "
+                            f"| {ctx()}"
+                        )
+                else:
+                    log.warning(
+                        f"ENTRY_VOLUME_GATE_DIAG | sym={symbol} "
+                        f"ta_cache_service_missing=True | {ctx()}"
+                    )
             except Exception as _evg_exc:
                 # WARNING not debug: this exception decides whether the gate
                 # ever sees a real volume_ratio. At log_level=INFO a debug
