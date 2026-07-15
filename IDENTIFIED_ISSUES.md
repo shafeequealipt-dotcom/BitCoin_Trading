@@ -76,9 +76,10 @@ evidence and phased rollout in `IMPLEMENT_ENTRY_VOLUME_GATE.md`.
 
 | # | Issue | Fix | Status |
 |---|-------|-----|--------|
-| 19 | **No entry-time feature predicts trade outcome** — X-RAY confidence, signal confidence, ensemble agreement, regime confidence, ADX all statistically identical between winners and losers (June diagnosis, confirmed independently in the July re-analysis) | `volume_ratio` at entry found to separate winners/losers on the July window. Gate shipped `src/core/entry_volume_gate.py` + `[entry_volume_gate]` config, wired into `strategy_worker._execute_claude_trade` | ✅ Phase 0 (observe) shipped `5ea9823`; Phase 1 (enforce @ 0.30) code-complete, config flipped pending deploy — see note below |
+| 19 | **No entry-time feature predicts trade outcome** — X-RAY confidence, signal confidence, ensemble agreement, regime confidence, ADX all statistically identical between winners and losers (June diagnosis, confirmed independently in the July re-analysis) | `volume_ratio` at entry found to separate winners/losers on the July window. Gate shipped `src/core/entry_volume_gate.py` + `[entry_volume_gate]` config, wired into `strategy_worker._execute_claude_trade` | ✅ Deployed and verified live 2026-07-15, `mode="enforce"` @ threshold 0.30 — see note below and issue #22 |
 | 20 | **June log bundle (source of the entries-quality diagnosis) rotated off the VM** — blocked any true cross-window validation of candidate entry filters | `scripts/daily_trade_export.py` extended to archive full `trade_log` + `trade_intelligence` tables to dated CSVs daily (`data/trade_logs/archive/`, 90-day retention), independent of log rotation | ✅ Fixed |
-| 21 | **`trading-export.service` and `trading-healthcheck.service` silently failing on the VM since 2026-07-13/14** — both scripts lost their executable bit in the 2026-07-08 deploy (`-rw-rw-r--` instead of `-rwxrwxr-x`), systemd exec step failed with `Permission denied` every scheduled run, no alert surfaced it | `chmod +x` restored on both scripts on the VM | ✅ Fixed |
+| 21 | **`trading-export.service` and `trading-healthcheck.service` silently failing on the VM since 2026-07-13/14** — both scripts lost their executable bit in the 2026-07-08 deploy (`-rw-rw-r--` instead of `-rwxrwxr-x`), systemd exec step failed with `Permission denied` every scheduled run, no alert surfaced it | `chmod +x` restored on both scripts on the VM, AND fixed in git itself (mode committed as 644 despite systemd needing +x — would have silently re-broken on the very next deploy pull otherwise) | ✅ Fixed |
+| 22 | **`entry_volume_gate` silently no-op for ~2.5 hours after first deploy** — `_execute_claude_trade` has two other, pre-existing, purely-local `from src.core.types import TimeFrame` re-imports later in the same function body. Python scopes `TimeFrame` as local to the *whole function* because of those, so the gate's earlier `TimeFrame.M5` reference raised `UnboundLocalError: local variable 'TimeFrame' referenced before assignment` on all 40 live evaluations — silently caught by the gate's own try/except and logged at `debug` (invisible at the deployed `log_level=INFO`), so it looked like the gate was just never seeing volume data rather than crashing | Removed both redundant local imports (`TimeFrame` already imported at module level, `strategy_worker.py:24`); bumped the TA-fetch-failure log from `debug` to `warning` permanently so a regression like this is never silent again | ✅ Fixed — verified live: first post-fix trade (10:45:30 UTC) showed `vr=2.596022 verdict=pass`, real data flowing correctly |
 
 **Note on issue #19 enforcement:** Phase 1 (`mode="enforce"`) skips the
 plan's original live-counterfactual gate (observe for ≥3 days / ≥200 trades
@@ -86,7 +87,11 @@ before enforcing) — the operator chose to enforce immediately on deploy
 rather than wait for a live confirmation window. This is a deliberate
 acceptance of one-window-validation risk, not an oversight; if the enforced
 week's data disagrees with the July window, revert `config.toml
-[entry_volume_gate] mode` to `"observe"` (instant, config-only).
+[entry_volume_gate] mode` to `"observe"` (instant, config-only). Note that
+because of issue #22, the gate was actually a no-op (never blocking
+anything) for the first ~2.5 hours post-deploy — the enforced week's clock
+should be considered to start from the #22 fix (2026-07-15 ~10:35 UTC), not
+from the original deploy.
 
 ## Open Issues Still to Address
 

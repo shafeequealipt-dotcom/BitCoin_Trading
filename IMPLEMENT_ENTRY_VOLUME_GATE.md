@@ -1,6 +1,6 @@
 # IMPLEMENT: Entry Volume-Ratio Gate
 
-> **Status:** Phase 0 + Phase 1 IMPLEMENTED (config set to `mode="enforce"`), Phase 2 items 2-3 done — not yet deployed to the VM. See §7-§8.
+> **Status:** DEPLOYED AND VERIFIED LIVE on the VM, `mode="enforce"` @ threshold 0.30. See §7-§9.
 > **Date:** 2026-07-15
 > **Evidence base:** 371 closed shadow trades on the VM (`trade_intelligence`, 2026-07-11 → 2026-07-14, all pre-dating the R:R fix `d1b1561`)
 > **Depends on:** nothing. **Blocks:** nothing — operator chose to enforce on first deploy rather than gate on a live counterfactual (see §8).
@@ -258,5 +258,102 @@ entire remaining Phase 1 scope.
 local dry-run against `data/trading.db` producing correct archive CSVs;
 retention-pruning behavior verified with an artificially-aged file;
 `Settings._load_fresh` round-trips `mode="enforce"` correctly from the
-real `config.toml`. Not yet verified live on the VM — deploy is the next
-step.
+real `config.toml`.
+
+---
+
+## 9. Phase 3 (deploy) implementation record (2026-07-15)
+
+Deployed to the VM (140.245.230.251, `~/trading-bot`) and restarted
+`trading-workers` + `trading-brain`. A real production bug was found and
+fixed during live verification — not part of the original plan, recorded
+here in full since it's the kind of thing that would otherwise re-surface
+silently.
+
+### Pre-deploy fix: executable bit
+
+Before pulling, discovered git had `scripts/daily_trade_export.py` and
+`scripts/check_bot_health.py` committed as mode `100644` despite systemd
+invoking them directly (`ExecStart=.../scripts/*.py`, no `python3` prefix).
+Pulling as-is would have silently re-broken the two systemd timers that
+were manually `chmod +x`'d on the VM earlier in the Phase 2 work (see
+`IDENTIFIED_ISSUES.md` #21). Fixed by setting the executable bit in git
+itself (commit `97dc703`) before the deploy pull, so the fix is durable
+across future deploys instead of living only as VM-side manual state.
+
+### Bug found during deploy verification: `UnboundLocalError` on `TimeFrame`
+
+After the first restart, the gate evaluated 40 consecutive live trades
+over ~2.5 hours and returned `volume_ratio_unavailable` (`vr=NA`) on
+every single one — despite an isolated reproduction of the exact same
+`TACache.analyze()` call, for the exact same symbols, returning real
+values immediately. The gate's `try/except` was silently swallowing the
+real cause at `log.debug`, which is invisible at the deployed
+`log_level=INFO`.
+
+**Diagnosis path:**
+1. Bumped the swallowed exception to `log.warning` (commit `3943fd3`) —
+   deployed, waited, and got **zero** `ENTRY_VOLUME_GATE_TA_FETCH_FAIL`
+   lines even though `vr` was still always `NA`. This ruled out an
+   exception entirely — the failure was in normal control flow.
+2. Added a temporary detailed dump of the raw TA dict shape (commit
+   `9038ee7`, explicitly marked TEMP) — deployed, waited, and this time
+   caught the real exception: `UnboundLocalError: local variable
+   'TimeFrame' referenced before assignment`.
+3. **Root cause:** `_execute_claude_trade` (the same function the gate
+   lives in) has two *other*, pre-existing, purely-local
+   `from src.core.types import TimeFrame` re-imports later in the
+   function body (the T23 divergence-tracking block and the post-order
+   observability capture block) — both redundant, since `TimeFrame` is
+   already imported at module level (`strategy_worker.py:24`). Python
+   determines variable scope at compile time for the *whole function*:
+   because `TimeFrame` is assigned locally somewhere in the function
+   (via those local imports), Python treats every reference to
+   `TimeFrame` inside that function as local — including the gate's
+   `TimeFrame.M5` reference, which runs *earlier* in execution order but
+   is still inside the same function scope. Referencing a local before
+   its assignment line raises `UnboundLocalError`. This bug was latent
+   before the gate existed (nothing referenced `TimeFrame` earlier in the
+   function), and became live the moment the gate's earlier reference was
+   added.
+4. **Fix** (commit `62b93b9`): removed both redundant local imports —
+   `TimeFrame` resolves to the module-level import for the whole function
+   again. Also removed the TEMP diagnostic dump now that the cause was
+   found, keeping the `log.warning` bump (a legitimate permanent
+   improvement — a silent `log.debug` here defeats the entire point of
+   having a try/except safety net).
+
+**Verified fix, live:** redeployed, restarted. First trade proposal after
+the fix (10:45:30 UTC) shows:
+```
+ENTRY_VOLUME_GATE | sym=BZUSDT vr=2.596022 thr=0.30 mode=enforce
+verdict=pass would_block=False reason=volume_ratio_ok
+```
+Real numeric value, correct threshold comparison, correct verdict.
+`ENTRY_VOLUME_GATE_TA_FETCH_FAIL` total stayed at 1 (the single
+pre-fix occurrence, not a new one). Zero trades blocked so far — expected,
+since nothing pathological has been proposed yet.
+
+**Also confirmed during this process (not bugs, expected behavior):**
+- Cold-start warmup after any restart: the brain's first 1-2 cycles
+  post-restart return `STRAT_CALL_A_SKIPPED reason=no_packages_available`
+  until the scanner repopulates coin packages (~5-10 min) — matches
+  `IDENTIFIED_ISSUES.md` #5.
+- Fail-open behavior confirmed correct across all 40 pre-fix NA
+  evaluations: `would_block=False` every time, zero trades wrongly
+  blocked by the bug itself — the bug degraded the gate to a no-op, it
+  did not cause any incorrect blocking.
+
+### What's now live
+
+`config.toml [entry_volume_gate]`: `enabled=true mode="enforce"
+min_volume_ratio=0.30`, running in production on the VM, evaluating real
+`volume_ratio` data, ready to block trades below threshold.
+
+### Next steps (unchanged from §8, now actually actionable)
+
+- Monitor the enforced week: block rate, trade count, win%, avg
+  win/avg loss ratio, net PnL — compare against the baseline window's
+  characteristics.
+- Threshold tuning toward 0.4-0.5 once enforced-mode data exists.
+- R:R fix (`d1b1561`) live measurement once enough post-fix trades close.
