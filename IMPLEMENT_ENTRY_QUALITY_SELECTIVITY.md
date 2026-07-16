@@ -302,3 +302,47 @@ parameter on correlational hold-time data — when the much simpler,
 already-shipped Phase A explains most of the pattern — would be
 premature. Revisit only with fresh post-Phase-A data if the late-hold
 bucket is still a problem once dead-tape entries are actually gone.
+
+---
+
+## 7. Phase A deploy + live verification (2026-07-16)
+
+Deployed to the VM (`git pull` → `da2002c`, restart `trading-workers` +
+`trading-brain` at 16:14:51 UTC). Pre-restart: `py_compile` clean,
+`Settings._load_fresh` confirmed `atr_enabled=True atr_mode=enforce
+min_atr_pct=0.20` from the real deployed `config.toml`. Post-restart:
+zero new errors (the two warnings seen — a ticker-buffer flush failure
+and a transient shadow-DB lock — are both pre-existing, confirmed
+present in logs going back to 2026-07-09, unrelated to this change).
+
+**Verification had two stages**, because the first several trades
+proposed after restart all happened to be dead-tape coins that the
+volume-ratio gate blocked before the (downstream) ATR check ever ran:
+
+1. **Isolated mechanism proof** — direct live-data test via `TACache`
+   against the VM's real `trading.db`, independent of waiting for the
+   brain to propose a qualifying trade:
+   ```
+   BTCUSDT: vr=1.888266 atr=0.071781 | vr_verdict=pass atr_verdict=block
+   ```
+   BTC had strong volume (would pass the volume gate alone) but genuinely
+   flat price action (0.072% ATR) — exactly the "active tape, not
+   actually moving" case the volume gate alone cannot see. Confirms the
+   ATR gate does real, independent work, not redundant with the volume
+   gate.
+
+2. **Live end-to-end confirmation** — at 16:30:45 UTC a real proposed
+   trade (TRXUSDT, `did=d-1784219429314`) passed the volume gate then
+   was correctly caught by the ATR gate:
+   ```
+   ENTRY_VOLUME_GATE | sym=TRXUSDT vr=1.883986 verdict=pass
+   ENTRY_ATR_GATE | sym=TRXUSDT atr=0.039689 thr=0.20 verdict=block
+     would_block=True reason=atr_pct_below_threshold
+   ```
+   Pre-Phase-A this trade would have executed (it already cleared every
+   other gate). Now correctly blocked: 0.04% ATR is deep in the "can't
+   reach TP before fees/stall erode it" zone from §1a.
+
+**Current live status:** both gates enforcing — volume-ratio @ 0.30,
+ATR @ 0.20. Next milestone: revisit thresholds and the Phase C question
+(§6) once ~200 enforced trades have accumulated post-deploy.
