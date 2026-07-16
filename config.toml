@@ -3525,6 +3525,27 @@ enabled = true
 mode = "enforce"
 min_volume_ratio = 0.30
 
+# ── ATR gate (2026-07-16) — same section, independent knobs ─────────
+# A 342-trade analysis (2026-07-13..16, split at the R:R fix deploy)
+# found entry ATR% is a strong, monotonic selector: entry_atr_pct < 0.20%
+# lost money as a cohort (win% 35-47%, cum PnL negative) across BOTH the
+# pre- and post-fix windows; entry_atr_pct >= 0.20% carried the entire
+# post-fix profit (66-68% win, +13 to +15% cum on this window). See
+# IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §1a for the full evidence and
+# the honest caveat: no symbol had enough trades on both sides of the
+# threshold for a within-symbol robustness check, so part of the effect
+# may be "which coins are moving" rather than pure entry timing.
+#
+# OPERATOR DECISION (2026-07-16): enforcing on first deploy, same
+# trade-off as the volume gate above — skips the plan's observe-first
+# staging in exchange for speed. min_atr_pct started at the conservative
+# end of the evidence (0.20, not the stronger 0.25 split) to reduce
+# blast radius. Revert instantly via atr_mode = "observe" (config-only,
+# worker restart only). min_atr_pct = 0 is an instant kill switch.
+atr_enabled = true
+atr_mode = "enforce"
+min_atr_pct = 0.20
+
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
 # Watchdog probes the per-worker liveness tracker every interval and
 # emits WORKER_NEVER_TICKED / WORKER_TICK_OVERDUE warnings when a

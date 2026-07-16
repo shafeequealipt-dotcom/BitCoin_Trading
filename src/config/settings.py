@@ -5087,7 +5087,14 @@ class LossCuttingSettings:
 
 @dataclass
 class EntryVolumeGateSettings:
-    """Entry Volume-Ratio Gate (2026-07-15) — Phase 0, observe-only.
+    """Entry Quality Gates — volume-ratio (2026-07-15) + ATR (2026-07-16).
+
+    Two independent entry-time gates share this settings section and the
+    ``strategy_worker`` wiring, since both read from the same TA-cache
+    call. Each has its own enable/threshold/mode so one can enforce while
+    the other observes.
+
+    ## Volume-ratio gate (deployed, enforcing)
 
     A 371-trade VM analysis (2026-07-11..14, ``trade_intelligence``) found
     that ``volume_ratio`` at entry (current M5 volume vs its SMA) separates
@@ -5096,28 +5103,44 @@ class EntryVolumeGateSettings:
     -$71.17 dropped, and the effect survived five robustness checks
     (per-day, leave-one-symbol-out, within-symbol, threshold sensitivity,
     chronological halves). See IMPLEMENT_ENTRY_VOLUME_GATE.md for the full
-    evidence and phased rollout plan.
+    evidence and phased rollout plan. Later correction (see
+    IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §1b/§4): the live entry-time
+    gate log shows no gradient above the 0.30 floor (the original
+    separation was partly a close-time capture artifact) — kept as a
+    dead-tape floor, not tuned upward.
 
-    Phase 0 (this build) ships with ``mode="observe"``: every proposed
-    trade logs ``ENTRY_VOLUME_GATE`` with ``would_block``, but nothing is
-    ever skipped. Only after a live counterfactual (re-running the same
-    join against fresh ``trade_intelligence`` rows) confirms the
-    would-block cohort underperforms does Phase 1 flip ``mode`` to
-    "enforce". One 4-day window is not enough evidence to block real
-    trades without that live confirmation first.
+    ## ATR gate (2026-07-16)
+
+    A 342-trade analysis (2026-07-13..16, split at the R:R fix deploy)
+    found entry ATR% is a strong, monotonic selector: near-flat coins
+    (ATR < 0.20%) lose money as a cohort across two independent windows;
+    genuinely moving coins (ATR >= 0.20%) carry the entire post-fix
+    profit. See IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §1a for the full
+    evidence. Operator directed shipping directly to ``atr_mode="enforce"``
+    on first deploy (see that doc §2 point 4 / §3 Phase A for the
+    accepted risk — the filter partly selects *which coins are moving*
+    rather than being validated within-symbol).
 
     Attributes:
-        enabled: Master switch for the gate machinery (observability +
-            enforcement). False = gate code path never runs.
+        enabled: Master switch for the volume-ratio gate machinery
+            (observability + enforcement). False = that gate's code path
+            never runs. Does not affect the ATR gate.
         mode: "observe" (log would_block, never skip) or "enforce"
-            (actually skip trades below the threshold).
+            (actually skip trades below the threshold) — volume-ratio gate.
         min_volume_ratio: Trades with volume_ratio below this are
             flagged/blocked. 0 = gate is a no-op even when enabled and in
             enforce mode (instant kill switch without touching `enabled`).
+        atr_enabled: Master switch for the ATR gate machinery.
+        atr_mode: "observe" or "enforce" — ATR gate.
+        min_atr_pct: Trades with entry ATR% below this are flagged/blocked
+            (dead-tape floor). 0 = no-op kill switch.
     """
     enabled: bool = True
     mode: str = "observe"
     min_volume_ratio: float = 0.30
+    atr_enabled: bool = True
+    atr_mode: str = "observe"
+    min_atr_pct: float = 0.20
 
     def __post_init__(self) -> None:
         if self.mode not in ("observe", "enforce"):
@@ -5129,6 +5152,16 @@ class EntryVolumeGateSettings:
             raise ValueError(
                 f"entry_volume_gate.min_volume_ratio must be >= 0, "
                 f"got {self.min_volume_ratio}"
+            )
+        if self.atr_mode not in ("observe", "enforce"):
+            raise ValueError(
+                f"entry_volume_gate.atr_mode must be 'observe' or 'enforce', "
+                f"got {self.atr_mode!r}"
+            )
+        if self.min_atr_pct < 0:
+            raise ValueError(
+                f"entry_volume_gate.min_atr_pct must be >= 0, "
+                f"got {self.min_atr_pct}"
             )
 
 

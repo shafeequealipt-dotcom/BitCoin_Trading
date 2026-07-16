@@ -1,9 +1,10 @@
-"""Entry Volume-Ratio Gate (2026-07-15, Phase 0) tests.
+"""Entry Quality Gates (volume-ratio 2026-07-15, ATR 2026-07-16) tests.
 
-Verifies the pure-function gate evaluator produces correct verdicts
+Verifies the pure-function gate evaluators produce correct verdicts
 across the fail-open / threshold / kill-switch paths, and that
 EntryVolumeGateSettings rejects invalid config. See
-IMPLEMENT_ENTRY_VOLUME_GATE.md for the evidence behind the threshold.
+IMPLEMENT_ENTRY_VOLUME_GATE.md and IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md
+for the evidence behind each threshold.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from src.core.entry_volume_gate import (
     VERDICT_BLOCK,
     VERDICT_PASS,
     VERDICT_UNKNOWN_PASS,
+    evaluate_entry_atr_gate,
     evaluate_entry_volume_gate,
 )
 
@@ -66,3 +68,52 @@ def test_settings_rejects_invalid_mode() -> None:
 def test_settings_rejects_negative_threshold() -> None:
     with pytest.raises(ValueError):
         EntryVolumeGateSettings(min_volume_ratio=-0.1)
+
+
+# ── ATR gate (2026-07-16) ──────────────────────────────────────────────
+
+def test_atr_below_threshold_blocks() -> None:
+    result = evaluate_entry_atr_gate(atr_pct=0.15, min_atr_pct=0.20)
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+    assert result.atr_pct == 0.15
+
+
+def test_atr_at_or_above_threshold_passes() -> None:
+    result = evaluate_entry_atr_gate(atr_pct=0.20, min_atr_pct=0.20)
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+    result_high = evaluate_entry_atr_gate(atr_pct=0.85, min_atr_pct=0.20)
+    assert result_high.verdict == VERDICT_PASS
+    assert result_high.would_block is False
+
+
+def test_none_atr_fails_open() -> None:
+    """Missing ATR data must never block a trade (same fail-open
+    convention as the volume gate)."""
+    result = evaluate_entry_atr_gate(atr_pct=None, min_atr_pct=0.20)
+    assert result.verdict == VERDICT_UNKNOWN_PASS
+    assert result.would_block is False
+
+
+def test_atr_zero_threshold_is_kill_switch() -> None:
+    result = evaluate_entry_atr_gate(atr_pct=0.001, min_atr_pct=0.0)
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_atr_settings_defaults() -> None:
+    settings = EntryVolumeGateSettings()
+    assert settings.min_atr_pct == 0.20
+    assert settings.atr_mode == "observe"
+
+
+def test_atr_settings_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(atr_mode="block_everything")
+
+
+def test_atr_settings_rejects_negative_threshold() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(min_atr_pct=-0.1)

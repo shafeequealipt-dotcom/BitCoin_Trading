@@ -13,7 +13,7 @@ Flow: PnL check -> get universe -> get regime -> prefetch data ->
 
 from src.analysis.engine import TAEngine
 from src.config.settings import EntryVolumeGateSettings, FlipTPSettings, Settings
-from src.core.entry_volume_gate import evaluate_entry_volume_gate
+from src.core.entry_volume_gate import evaluate_entry_atr_gate, evaluate_entry_volume_gate
 from src.core.flip_tp_capper import (
     METHOD_DISABLED,
     METHOD_STRUCTURAL_KEPT,
@@ -2059,8 +2059,8 @@ class StrategyWorker(SweetSpotWorker):
             ("sanity_reject", "enforcer_block", "survival_block", "xray_skip",
              "xray_conflict", "unsupported_symbol", "dup_position",
              "service_missing", "price_fetch_fail", "price_invalid",
-             "sltp_skip", "entry_volume_gate_blocked", "qty_zero",
-             "order_reject"). Caller logs TRADE_SKIP.
+             "sltp_skip", "entry_volume_gate_blocked", "entry_atr_gate_blocked",
+             "qty_zero", "order_reject"). Caller logs TRADE_SKIP.
         """
         import math
 
@@ -3185,21 +3185,24 @@ class StrategyWorker(SweetSpotWorker):
                 )
                 return (False, pair_reason)
 
-        # ── Entry Volume-Ratio Gate (2026-07-15, Phase 0 — observe-only) ──
-        # 371-trade VM analysis found volume_ratio at entry (M5 current
-        # volume vs SMA) separates winners from losers: vr>=0.4 kept
-        # +$49.31 net vs dropped -$71.17 on the baseline window, surviving
-        # 5 robustness checks. See IMPLEMENT_ENTRY_VOLUME_GATE.md. Phase 0
-        # mode="observe" logs would_block on every proposed trade and
-        # blocks nothing; Phase 1 flips to "enforce" only after a live
-        # counterfactual confirms the split on fresh trade_intelligence
-        # rows. Reads via ta_cache (TTL-cached, shared across consumers —
-        # no extra TA computation cost).
+        # ── Entry Quality Gates: Volume-Ratio (2026-07-15) + ATR (2026-07-16) ──
+        # Two independent entry-time gates sharing one TA fetch. Volume-ratio:
+        # 371-trade analysis found volume_ratio at entry separates winners
+        # from losers (see IMPLEMENT_ENTRY_VOLUME_GATE.md); later corrected
+        # to a dead-tape floor only (no gradient above 0.30 in live entry-
+        # time data, IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §1b/§4). ATR:
+        # 342-trade analysis found entry ATR% is a strong, monotonic
+        # selector — near-flat coins lose money as a cohort; the entire
+        # post-fix profit lives in the ATR >= 0.20% book (see that doc
+        # §1a). Both gates read the same ta_cache result (TTL-cached,
+        # shared across consumers — one fetch, zero extra TA cost) and
+        # enforce/observe independently via their own mode/enabled flags.
         _evg_settings = getattr(self.settings, "entry_volume_gate", None) or (
             EntryVolumeGateSettings()
         )
-        if _evg_settings.enabled:
+        if _evg_settings.enabled or _evg_settings.atr_enabled:
             _evg_volume_ratio: float | None = None
+            _evg_atr_pct: float | None = None
             try:
                 _evg_ta_cache = self.services.get("ta_cache") or self.services.get("ta")
                 if _evg_ta_cache:
@@ -3210,10 +3213,13 @@ class StrategyWorker(SweetSpotWorker):
                         _evg_volume_ratio = (_evg_ta.get("volume") or {}).get(
                             "volume_sma_ratio",
                         )
+                        _evg_atr_pct = (_evg_ta.get("volatility") or {}).get(
+                            "natr_14",
+                        )
             except Exception as _evg_exc:
-                # WARNING not debug: this exception decides whether the gate
-                # ever sees a real volume_ratio. At log_level=INFO a debug
-                # line here would be invisible, so a future bug in this path
+                # WARNING not debug: this exception decides whether either
+                # gate ever sees real data. At log_level=INFO a debug line
+                # here would be invisible, so a future bug in this path
                 # would again produce zero diagnostic signal (2026-07-15: a
                 # local `from src.core.types import TimeFrame` re-import
                 # later in this same function shadowed the module-level
@@ -3227,24 +3233,45 @@ class StrategyWorker(SweetSpotWorker):
                     f"err='{str(_evg_exc)[:200]}' | {ctx()}"
                 )
 
-            _evg_result = evaluate_entry_volume_gate(
-                volume_ratio=_evg_volume_ratio,
-                min_volume_ratio=_evg_settings.min_volume_ratio,
-            )
-            log.info(
-                f"ENTRY_VOLUME_GATE | sym={symbol} "
-                f"vr={_evg_result.volume_ratio if _evg_result.volume_ratio is not None else 'NA'} "
-                f"thr={_evg_result.threshold:.2f} mode={_evg_settings.mode} "
-                f"verdict={_evg_result.verdict} would_block={_evg_result.would_block} "
-                f"reason={_evg_result.reason} | {ctx()}"
-            )
-            if _evg_settings.mode == "enforce" and _evg_result.would_block:
-                log.warning(
-                    f"TRADE_SKIP | sym={symbol} rsn=entry_volume_gate_blocked "
-                    f"detail='vr={_evg_result.volume_ratio} thr={_evg_result.threshold:.2f}' "
-                    f"| {ctx()}"
+            if _evg_settings.enabled:
+                _evg_result = evaluate_entry_volume_gate(
+                    volume_ratio=_evg_volume_ratio,
+                    min_volume_ratio=_evg_settings.min_volume_ratio,
                 )
-                return (False, "entry_volume_gate_blocked")
+                log.info(
+                    f"ENTRY_VOLUME_GATE | sym={symbol} "
+                    f"vr={_evg_result.volume_ratio if _evg_result.volume_ratio is not None else 'NA'} "
+                    f"thr={_evg_result.threshold:.2f} mode={_evg_settings.mode} "
+                    f"verdict={_evg_result.verdict} would_block={_evg_result.would_block} "
+                    f"reason={_evg_result.reason} | {ctx()}"
+                )
+                if _evg_settings.mode == "enforce" and _evg_result.would_block:
+                    log.warning(
+                        f"TRADE_SKIP | sym={symbol} rsn=entry_volume_gate_blocked "
+                        f"detail='vr={_evg_result.volume_ratio} thr={_evg_result.threshold:.2f}' "
+                        f"| {ctx()}"
+                    )
+                    return (False, "entry_volume_gate_blocked")
+
+            if _evg_settings.atr_enabled:
+                _evg_atr_result = evaluate_entry_atr_gate(
+                    atr_pct=_evg_atr_pct,
+                    min_atr_pct=_evg_settings.min_atr_pct,
+                )
+                log.info(
+                    f"ENTRY_ATR_GATE | sym={symbol} "
+                    f"atr={_evg_atr_result.atr_pct if _evg_atr_result.atr_pct is not None else 'NA'} "
+                    f"thr={_evg_atr_result.threshold:.2f} mode={_evg_settings.atr_mode} "
+                    f"verdict={_evg_atr_result.verdict} would_block={_evg_atr_result.would_block} "
+                    f"reason={_evg_atr_result.reason} | {ctx()}"
+                )
+                if _evg_settings.atr_mode == "enforce" and _evg_atr_result.would_block:
+                    log.warning(
+                        f"TRADE_SKIP | sym={symbol} rsn=entry_atr_gate_blocked "
+                        f"detail='atr={_evg_atr_result.atr_pct} thr={_evg_atr_result.threshold:.2f}' "
+                        f"| {ctx()}"
+                    )
+                    return (False, "entry_atr_gate_blocked")
 
         # ── Fix 7 (volatility-scaled stop + size haircut, 2026-06-10) ──
         # The constant ~1.5% min stop sat INSIDE volatile coins' noise band (91%

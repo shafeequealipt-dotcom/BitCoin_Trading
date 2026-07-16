@@ -1,6 +1,6 @@
 # IMPLEMENT: Entry-Quality Selectivity — fewer trades, higher accuracy
 
-> **Status:** PLANNED — not yet implemented
+> **Status:** Phase A IMPLEMENTED (`atr_mode="enforce"` @ 0.20, code-complete, deploy pending). Phase B and Phase C investigated and NOT implemented — evidence did not support either change; see §6.
 > **Date:** 2026-07-16
 > **Operator goal (verbatim intent):** fewer trades is fine; improve accuracy, take only confident setups, make genuine PnL. No indiscriminate trade-pulling.
 > **Evidence base:** 342 trades Jul 13–16 (`trade_intelligence`, split at the R:R fix deploy 2026-07-14T19:05 UTC), 546 live entry-gate evaluations, honest entry-time joins.
@@ -197,3 +197,108 @@ feature lands in the DB for free.
   positive after fees on a ≥400-trade sample.
 - Rollback for every phase is config-only (`atr_mode="observe"`, or
   `min_atr_pct=0`).
+
+---
+
+## 6. Implementation record (2026-07-16)
+
+Operator directed completing all three phases in one session. Phase A
+shipped; Phase B and Phase C were investigated in full but NOT
+implemented — in both cases the evidence that justified the phase in
+§1 did not survive a closer look at the actual live mechanism, and
+shipping a fix for a problem that isn't really there would be exactly
+the "band-aid" this project's rules forbid, and would work against the
+operator's actual goal (genuine accuracy, not motion for its own sake).
+
+### Phase A — ATR gate: IMPLEMENTED
+
+- `src/core/entry_volume_gate.py`: added `ATRGateResult` +
+  `evaluate_entry_atr_gate(atr_pct, min_atr_pct)`, mirroring the existing
+  volume-ratio gate's shape/fail-open convention exactly.
+- `src/config/settings.py`: extended `EntryVolumeGateSettings` with
+  `atr_enabled` / `atr_mode` / `min_atr_pct` (independent of the
+  volume-ratio gate's own `enabled`/`mode`). Builder already used the
+  generic `hasattr`-filtered pattern — no change needed there.
+- `config.toml [entry_volume_gate]`: added `atr_enabled=true
+  atr_mode="enforce" min_atr_pct=0.20`. Operator decision recorded
+  inline: enforcing on first deploy, same trade-off as the volume gate.
+- `src/workers/strategy_worker.py`: restructured the gate block so the
+  TA fetch happens once and feeds both gates independently (each with
+  its own enabled/mode check, own log line — `ENTRY_VOLUME_GATE` and
+  the new `ENTRY_ATR_GATE` — and own enforcement branch). Reads
+  `natr_14` from the volatility block of the SAME already-fetched TA
+  result — zero added TA cost. New reason code
+  `entry_atr_gate_blocked` added to the function's documented enum.
+- `tests/test_entry_volume_gate.py`: 8 new tests for the ATR gate
+  (threshold boundary, fail-open, kill-switch, settings validation),
+  mirroring the volume-gate test structure.
+- **Verified:** `py_compile` clean, `ruff --select F` clean (only a
+  pre-existing unrelated unused-import finding), `Settings._load_fresh`
+  round-trips both gates' config correctly, 63/63 relevant tests pass.
+
+### Phase B — sizing: INVESTIGATED, NOT IMPLEMENTED
+
+§1e's premise ("losers sized larger, median $194 vs $168") came from the
+OLD 371-trade pre-fix baseline and was assumed to be driven by
+conviction-weighted sizing amplifying the brain's (inverted) confidence.
+Tracing the actual live code path in `src/apex/gate.py` disproved both
+halves of that assumption:
+
+1. **The conviction-weighting code is inert in live config.** Under
+   `brain_authoritative_sizing_enabled=true` (confirmed live in
+   `config.toml`), the entire conviction-weight block (TIAS profit
+   factor, X-RAY confidence, RR multipliers) is computed and then
+   explicitly discarded — the code's own comment says so
+   (`gate.py` ~line 517: "under the live brain_authoritative_sizing_
+   enabled=true mode this whole weight is computed then discarded").
+   Live `size_usd` is the brain's raw proposed value, clamped only by a
+   FIXED per-trade capital ceiling (`usable / max_positions`) —
+   independent of any conviction signal. The real driver, if there were
+   one, would have to be the brain's own free-form JSON choice, guided
+   by the prompt's "scaled by conviction" instruction (`strategist.py`
+   rule 9 / line ~399).
+2. **The size/outcome correlation does not replicate on fresh data.**
+   Post-R:R-fix (`position_size_usd`, the correct field — not `pnl_usd`-
+   derived): winner median $173 vs loser median $161 — nearly identical
+   — and `corr(size, pnl_pct) = -0.034` across 214 trades, essentially
+   zero. Sizing is currently neutral, not harmful.
+
+No code change made. The prompt's "scale by conviction" instruction is a
+legitimate strategy (small size on quick scalps, more on strong setups)
+and collapsing it into a flat band would blunt the system's ability to
+size up on Phase-A-validated high-quality setups — the opposite of the
+selectivity goal. Revisit only if a future window shows the correlation
+re-emerging, with `position_size_usd` (not a derived field).
+
+### Phase C — time-fuse: INVESTIGATED, NOT IMPLEMENTED
+
+§1d's hold-time decay (10-20min 43% win / -2.55%, >20min 24% win /
+-1.16%) was hypothesized to need a tighter stall-cut fuse. Two checks
+before touching the TimeDial (`src/core/time_dial.py`,
+`stall_min_age_fraction_young/old`, an already heavily-tuned,
+safety-critical parameter with explicit in-code history of prior
+over-tightening incidents — "the veto is what stops this becoming the
+new over-tightening"):
+
+1. **`_lc_stall_decision` only ever fires on already-negative trades**
+   (`profit_sniper.py`: `if pnl_pct >= 0: return False`). There is no
+   existing mechanism that scratches a flat/breakeven trade on time
+   alone — the described decay is trades that are ALREADY losing taking
+   longer to resolve, not healthy trades going stale.
+2. **Phase A's ATR gate already substantially fixes this pattern.**
+   68% of the 10-20min bucket's losers and 61% of the >20min bucket's
+   losers had `entry_atr_pct < 0.20` — they would already be blocked by
+   the Phase A gate. Retroactively applying the ATR filter to those
+   hold-time buckets flips them from clearly negative (-2.55%, -1.16%
+   cum) to positive/near-breakeven (+2.44%, +0.22% cum, though the
+   remaining >20min sample is thin at n=17). Dead-tape coins are
+   simultaneously the ones that can't hit TP fast (so they linger) AND
+   the ones the `dead_drifter`/`stall` machinery (already enabled,
+   `dead_drifter_age_fraction=0.70`) waits longest to act on, since the
+   TimeDial is deliberately patient early in a trade's life.
+
+No code change made. Re-tuning a delicate, already-painfully-tuned exit
+parameter on correlational hold-time data — when the much simpler,
+already-shipped Phase A explains most of the pattern — would be
+premature. Revisit only with fresh post-Phase-A data if the late-hold
+bucket is still a problem once dead-tape entries are actually gone.
