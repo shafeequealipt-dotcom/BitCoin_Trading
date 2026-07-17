@@ -1,7 +1,7 @@
 # IMPLEMENT: Entry-Quality Selectivity — fewer trades, higher accuracy
 
-> **Status:** Phase A IMPLEMENTED (`atr_mode="enforce"` @ 0.20, code-complete, deploy pending). Phase B and Phase C investigated and NOT implemented — evidence did not support either change; see §6.
-> **Date:** 2026-07-16
+> **Status:** Phase A deployed + verified live (§7). Phase B/C investigated, not implemented (§6). Recent-loss gate added 2026-07-17 following a live forensic trace of the ATR gate's first bad stretch — deployed, see §8.
+> **Date:** 2026-07-16 (updated 2026-07-17)
 > **Operator goal (verbatim intent):** fewer trades is fine; improve accuracy, take only confident setups, make genuine PnL. No indiscriminate trade-pulling.
 > **Evidence base:** 342 trades Jul 13–16 (`trade_intelligence`, split at the R:R fix deploy 2026-07-14T19:05 UTC), 546 live entry-gate evaluations, honest entry-time joins.
 > **Builds on:** `IMPLEMENT_ENTRY_VOLUME_GATE.md` (gate machinery, deployed + verified), `ENTRIES_QUALITY_DIAGNOSIS.md` (exits exonerated; entries are the problem).
@@ -346,3 +346,100 @@ volume-ratio gate blocked before the (downstream) ATR check ever ran:
 **Current live status:** both gates enforcing — volume-ratio @ 0.30,
 ATR @ 0.20. Next milestone: revisit thresholds and the Phase C question
 (§6) once ~200 enforced trades have accumulated post-deploy.
+
+---
+
+## 8. Recent-loss gate: forensic trace + implementation (2026-07-17)
+
+Less than 24h after the Phase A deploy, the operator asked for a
+before/after comparison. Direct answer: the post-ATR-gate window was
+worse on the surface (net -8.77% vs +7.42% pre-gate, R:R 0.49x vs
+0.99x, same win rate 55.2%) — but 87% of that loss (-$34.31 of -$39.29)
+came from one symbol, GWEIUSDT, over 9 trades in ~21 hours. The operator
+asked for a full forensic trace of every GWEIUSDT trade and, if the
+pattern was avoidable, a code fix — not a threshold retune.
+
+### What the forensic trace found
+
+Pulled `trade_thesis` (full reasoning text, SL/TP, setup type) for
+every GWEIUSDT trade since the Phase A restart. Every single trade was
+a **short**. Nearly every thesis contains the same sentence structure:
+*"despite the conflicting buy signal... structure and regime are
+authoritative"* — the brain explicitly notices its own signal layer
+disagreeing and overrides it, repeatedly, in the same direction, on
+the same coin. One thesis (03:49:02 UTC) reads verbatim: *"Despite
+RECENT_LOSER_COOLDOWN, the setup quality is B and the action hint
+suggests short-side pullback continuation."*
+
+That sentence proves two things at once: (1) a `RECENT_LOSER_COOLDOWN`
+mechanism already exists, and (2) it did not stop the trade. Tracing
+the codebase found **two** existing mechanisms, both bypassed:
+
+1. **`strategist.py:636`** — a prompt rule: *"closed at a loss within
+   1h — do NOT re-enter on sentiment or regime alone; require fresh,
+   independent per-coin structure."* This is advisory text in the LLM
+   prompt. The free-tier model can rationalize past it — and did,
+   explicitly, in its own words.
+2. **`scanner_worker._check_blockers`** — a real code-level qualitative
+   blocker (`recent_failure_blocker_hours=1`, live in `config.toml`),
+   which genuinely excludes a coin from the scanner's watchlist
+   ("Empty list = pass; non-empty = block the coin from selection").
+   This SHOULD have caught it. It sits upstream in the pipeline
+   (watchlist qualification), and three consecutive GWEIUSDT shorts
+   still closed at -1.76%, -1.90%, -1.94% within 59 minutes of each
+   other — meaning something in the qualification→candidate-selection
+   chain let the coin through anyway (force-include, protected-position
+   path, or a gap between watchlist qualification and final candidate
+   selection were not fully traced — out of scope once a more robust
+   fix was identified, see below).
+
+Rather than debug an upstream pipeline with multiple possible bypass
+paths, the same design principle from the volume/ATR gates applies:
+put the check at the **last point before order placement**, immune to
+whatever bypassed it upstream.
+
+### Implementation
+
+Third gate in the same family (`src/core/entry_volume_gate.py`,
+`EntryVolumeGateSettings`, `strategy_worker._execute_claude_trade`),
+same pattern as Phase A: pure evaluator (`evaluate_recent_loss_gate`),
+config-driven (`recent_loss_enabled` / `recent_loss_mode` /
+`recent_loss_lookback_hours` / `max_recent_losses`), independent
+enforce/observe mode, instant kill switch, fully logged
+(`ENTRY_RECENT_LOSS_GATE`). Unlike the TA-based gates it runs a direct
+DB query against `trade_log` (not `ta_cache`) — chosen specifically
+because `trade_log` is written synchronously at close with no TIAS/LLM
+analysis dependency, avoiding a latency blind-spot that would have
+undermined the whole point of a "last-mile, unbypassable" check.
+
+Thresholds (`lookback_hours=1.0`, `max_recent_losses=1`) are not new
+invented numbers — they encode the *existing* `RECENT_LOSER_COOLDOWN`
+prompt rule's own stated intent exactly. This is that rule, finally
+enforced in code instead of hoped for in the prompt.
+
+**A real bug was caught before deploy, not after:** the first version
+compared `closed_at` (stored ISO-8601 with a `T` separator, e.g.
+`"...T18:06:16.526042+00:00"`) against `datetime('now', ?)`'s
+space-separated output as a raw string. Since `'T' (0x54) > ' ' (0x20)`
+in ASCII, every same-day `closed_at` sorted as "later" than the
+reference regardless of actual time-of-day — silently turning a
+1-hour lookback into "any time today." Caught by testing the exact
+production query against live VM data before shipping (a direct
+lesson from the `IMPLEMENT_ENTRY_VOLUME_GATE.md` §9 UnboundLocalError
+incident: test against real data, not just unit tests with clean
+inputs). Fixed with `julianday()` on both sides, which parses either
+timestamp format into a comparable numeric value. Re-verified against
+the actual GWEIUSDT sequence: **the corrected query would have blocked
+the 18:30:22 and 19:02:25 re-entries** (1 and 2 prior same-direction
+losses respectively, both `>= max_recent_losses=1`) — the two trades
+that cost -1.895% and -1.944%, roughly 44% of the whole window's
+damage, from enforcing a rule that already existed on paper.
+
+**Verified:** `py_compile` clean, `ruff --select F` clean (same
+pre-existing unrelated finding), the corrected query re-tested against
+4 points in the real GWEIUSDT sequence (all 4 match hand-computed
+expected counts exactly), 72/72 relevant tests pass (8 new).
+
+**Not yet done:** live deploy + end-to-end confirmation (pending,
+following the same restart → verify → isolated-proof → live-log-line
+procedure as Phase A).

@@ -3546,6 +3546,34 @@ atr_enabled = true
 atr_mode = "enforce"
 min_atr_pct = 0.20
 
+# ── Recent-loss gate (2026-07-17) — same section, independent knobs ──
+# Forensic trace of GWEIUSDT's post-ATR-gate trades found the system
+# already has TWO mechanisms meant to prevent same-direction repeat
+# losses (a brain-prompt RECENT_LOSER_COOLDOWN rule requiring "fresh,
+# independent structure" before re-entering a just-closed loser, and a
+# scanner qualitative blocker at recent_failure_blocker_hours=1) — and
+# neither stopped 3 consecutive GWEIUSDT shorts closing at -1.76%,
+# -1.90%, -1.94% within 59 minutes of each other. One surviving thesis
+# reads "Despite RECENT_LOSER_COOLDOWN, the setup quality is B...". The
+# prompt rule is advisory (the free-tier model rationalized past it);
+# the scanner blocker is upstream and can be routed around. This gate
+# is last-mile: same execution point as the volume/ATR gates above,
+# after every other check has already passed, and it counts DB-verified
+# losses instead of trusting the model's self-assessed "setup quality".
+# See IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §8 for the full trace.
+#
+# OPERATOR DECISION (2026-07-17): enforcing on first deploy, same
+# trade-off as the other two gates. lookback_hours=1.0 and
+# max_recent_losses=1 exactly match the EXISTING advisory rule's
+# stated intent ("closed at a loss within 1h — do NOT re-enter") — this
+# is not a new invented threshold, it is that rule finally enforced in
+# code instead of hoped for in the prompt. Revert instantly via
+# recent_loss_mode = "observe". max_recent_losses = 0 is a kill switch.
+recent_loss_enabled = true
+recent_loss_mode = "enforce"
+recent_loss_lookback_hours = 1.0
+max_recent_losses = 1
+
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
 # Watchdog probes the per-worker liveness tracker every interval and
 # emits WORKER_NEVER_TICKED / WORKER_TICK_OVERDUE warnings when a

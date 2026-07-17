@@ -1,4 +1,5 @@
-"""Entry Quality Gates (volume-ratio 2026-07-15, ATR 2026-07-16) tests.
+"""Entry Quality Gates (volume-ratio 2026-07-15, ATR 2026-07-16,
+recent-loss 2026-07-17) tests.
 
 Verifies the pure-function gate evaluators produce correct verdicts
 across the fail-open / threshold / kill-switch paths, and that
@@ -18,6 +19,7 @@ from src.core.entry_volume_gate import (
     VERDICT_UNKNOWN_PASS,
     evaluate_entry_atr_gate,
     evaluate_entry_volume_gate,
+    evaluate_recent_loss_gate,
 )
 
 
@@ -117,3 +119,66 @@ def test_atr_settings_rejects_invalid_mode() -> None:
 def test_atr_settings_rejects_negative_threshold() -> None:
     with pytest.raises(ValueError):
         EntryVolumeGateSettings(min_atr_pct=-0.1)
+
+
+# ── Recent-loss gate (2026-07-17) ──────────────────────────────────────
+
+def test_recent_loss_at_threshold_blocks() -> None:
+    """Zero-tolerance default: reaching the threshold blocks, matching
+    the RECENT_LOSER_COOLDOWN rule's 'do NOT re-enter' intent."""
+    result = evaluate_recent_loss_gate(recent_loss_count=1, max_recent_losses=1)
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+    assert result.recent_loss_count == 1
+
+
+def test_recent_loss_below_threshold_passes() -> None:
+    result = evaluate_recent_loss_gate(recent_loss_count=0, max_recent_losses=1)
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_recent_loss_exceeding_threshold_blocks() -> None:
+    result = evaluate_recent_loss_gate(recent_loss_count=3, max_recent_losses=1)
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+
+
+def test_recent_loss_higher_threshold_allows_one_retry() -> None:
+    """max_recent_losses=2 permits exactly one prior loss before blocking."""
+    result = evaluate_recent_loss_gate(recent_loss_count=1, max_recent_losses=2)
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+    result_at_2 = evaluate_recent_loss_gate(recent_loss_count=2, max_recent_losses=2)
+    assert result_at_2.verdict == VERDICT_BLOCK
+    assert result_at_2.would_block is True
+
+
+def test_recent_loss_zero_threshold_is_kill_switch() -> None:
+    result = evaluate_recent_loss_gate(recent_loss_count=5, max_recent_losses=0)
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_recent_loss_settings_defaults() -> None:
+    settings = EntryVolumeGateSettings()
+    assert settings.recent_loss_enabled is True
+    assert settings.recent_loss_mode == "observe"
+    assert settings.recent_loss_lookback_hours == 1.0
+    assert settings.max_recent_losses == 1
+
+
+def test_recent_loss_settings_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(recent_loss_mode="block_everything")
+
+
+def test_recent_loss_settings_rejects_negative_lookback() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(recent_loss_lookback_hours=-1.0)
+
+
+def test_recent_loss_settings_rejects_negative_max_losses() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(max_recent_losses=-1)

@@ -1,9 +1,10 @@
-"""Entry Quality Gates — volume-ratio (2026-07-15) + ATR (2026-07-16).
+"""Entry Quality Gates — volume-ratio (2026-07-15), ATR (2026-07-16),
+recent-loss (2026-07-17).
 
 Pure-function gates. Each returns a structured verdict for one entry-time
 feature of a proposed trade. No I/O, no settings object, no service
 dependencies — trivial to unit test and safe to call from a hot execution
-path. The two gates are independent: separate thresholds, separate modes,
+path. The gates are independent: separate thresholds, separate modes,
 separate verdicts — the caller (strategy_worker) decides per-gate whether
 a ``would_block`` verdict actually skips the trade.
 
@@ -36,6 +37,31 @@ e.g. insufficient candle history) always passes. This matches the existing
 per-label volume gates in ``src/workers/scanner/state_labeler.py``
 ("volume_ratio gate bypassed when input is None") — a data outage must
 never silently halt trading.
+
+## Recent-loss gate (2026-07-17)
+
+Forensic trace of every GWEIUSDT trade in the first ~21h post-ATR-gate
+window found a same-direction repeat-loss pattern the system was
+already *supposed* to prevent: the brain's own prompt carries a
+``RECENT_LOSER_COOLDOWN`` rule ("closed at a loss within 1h — do NOT
+re-enter... require fresh, independent per-coin structure"), and the
+scanner has a `recent_failure_blocker_hours=1` qualitative blocker
+(``scanner_worker._check_blockers``) — but three consecutive GWEIUSDT
+shorts closed at -1.76%, -1.90%, -1.94% within 59 minutes of each
+other, and one surviving thesis literally reads "Despite
+RECENT_LOSER_COOLDOWN, the setup quality is B and the action hint
+suggests short-side pullback continuation." Both existing mechanisms
+are either advisory (the prompt rule — the free-tier model can and did
+rationalize past it) or upstream in the pipeline (the scanner blocker,
+which a force-included/protected coin can route around). See
+IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §8 for the full forensic trace.
+
+This gate is the last-mile version: it runs at the same point as the
+volume-ratio and ATR gates — immediately before order placement, after
+every other check has passed — so no upstream bypass matters. It counts
+LOSSES on this exact (symbol, direction) pair within a lookback window
+and blocks if the count meets or exceeds a threshold, independent of
+the brain's own self-assessed "setup quality."
 """
 
 from __future__ import annotations
@@ -170,4 +196,59 @@ def evaluate_entry_atr_gate(
         verdict=VERDICT_PASS, would_block=False,
         atr_pct=atr_pct, threshold=min_atr_pct,
         reason="atr_pct_ok",
+    )
+
+
+@dataclass(frozen=True)
+class RecentLossGateResult:
+    """Structured verdict for one recent-loss-gate evaluation.
+
+    Unlike the volume-ratio and ATR gates, ``recent_loss_count`` is never
+    "unavailable" — a DB query failure or a genuinely empty history both
+    resolve to 0 (no fail-open ambiguity needed; 0 losses naturally
+    passes). See module docstring for why this gate exists.
+    """
+    verdict: str
+    would_block: bool
+    recent_loss_count: int
+    threshold: int
+    reason: str
+
+
+def evaluate_recent_loss_gate(
+    recent_loss_count: int,
+    max_recent_losses: int,
+) -> RecentLossGateResult:
+    """Evaluate a proposed trade's recent same-(symbol, direction) loss count.
+
+    Args:
+        recent_loss_count: Number of losing closes on this exact
+            (symbol, direction) pair within the configured lookback
+            window (computed by the caller via a direct DB query — kept
+            out of this pure function so it stays trivially testable).
+        max_recent_losses: Block once the count reaches this many.
+            <= 0 disables the gate entirely (always passes) — the
+            config-level kill switch.
+
+    Returns:
+        RecentLossGateResult with the verdict and would_block flag. The
+        caller decides whether would_block actually skips the trade,
+        based on the gate's configured mode ("observe" vs "enforce").
+    """
+    if max_recent_losses <= 0:
+        return RecentLossGateResult(
+            verdict=VERDICT_PASS, would_block=False,
+            recent_loss_count=recent_loss_count, threshold=max_recent_losses,
+            reason="gate_disabled_threshold_zero",
+        )
+    if recent_loss_count >= max_recent_losses:
+        return RecentLossGateResult(
+            verdict=VERDICT_BLOCK, would_block=True,
+            recent_loss_count=recent_loss_count, threshold=max_recent_losses,
+            reason="recent_loss_threshold_reached",
+        )
+    return RecentLossGateResult(
+        verdict=VERDICT_PASS, would_block=False,
+        recent_loss_count=recent_loss_count, threshold=max_recent_losses,
+        reason="recent_loss_count_ok",
     )

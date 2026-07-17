@@ -13,7 +13,11 @@ Flow: PnL check -> get universe -> get regime -> prefetch data ->
 
 from src.analysis.engine import TAEngine
 from src.config.settings import EntryVolumeGateSettings, FlipTPSettings, Settings
-from src.core.entry_volume_gate import evaluate_entry_atr_gate, evaluate_entry_volume_gate
+from src.core.entry_volume_gate import (
+    evaluate_entry_atr_gate,
+    evaluate_entry_volume_gate,
+    evaluate_recent_loss_gate,
+)
 from src.core.flip_tp_capper import (
     METHOD_DISABLED,
     METHOD_STRUCTURAL_KEPT,
@@ -2060,7 +2064,8 @@ class StrategyWorker(SweetSpotWorker):
              "xray_conflict", "unsupported_symbol", "dup_position",
              "service_missing", "price_fetch_fail", "price_invalid",
              "sltp_skip", "entry_volume_gate_blocked", "entry_atr_gate_blocked",
-             "qty_zero", "order_reject"). Caller logs TRADE_SKIP.
+             "entry_recent_loss_gate_blocked", "qty_zero", "order_reject").
+            Caller logs TRADE_SKIP.
         """
         import math
 
@@ -3272,6 +3277,66 @@ class StrategyWorker(SweetSpotWorker):
                         f"| {ctx()}"
                     )
                     return (False, "entry_atr_gate_blocked")
+
+        # ── Recent-Loss Gate (2026-07-17) — last-mile, independent of the ──
+        # TA-based gates above (direct DB query, no ta_cache involved).
+        # Forensic trace found the existing RECENT_LOSER_COOLDOWN prompt
+        # rule and the scanner's recent_failure_blocker_hours=1 qualitative
+        # blocker both failed to stop 3 consecutive GWEIUSDT shorts closing
+        # at -1.76%/-1.90%/-1.94% within 59 minutes of each other — one
+        # surviving thesis reads "Despite RECENT_LOSER_COOLDOWN, the setup
+        # quality is B...". This gate enforces what the prompt only asks
+        # for, at the last point before order placement, immune to any
+        # upstream bypass. See IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §8.
+        if _evg_settings.recent_loss_enabled:
+            _evg_recent_loss_count = 0
+            try:
+                # julianday(), not a raw string compare against
+                # datetime('now', ?) — closed_at is stored ISO-8601 with a
+                # 'T' separator ("...T18:06:16.526042+00:00"); datetime()
+                # emits a space-separated string ("...18:06:16"). Since
+                # 'T' (0x54) > ' ' (0x20) in ASCII, a raw string compare
+                # makes EVERY same-day closed_at sort as "later" than the
+                # reference regardless of actual time-of-day, silently
+                # widening a 1-hour lookback into "any time today." Caught
+                # in testing against live VM data before this ever
+                # deployed — julianday() parses both formats correctly
+                # into comparable numeric values.
+                _evg_hours = _evg_settings.recent_loss_lookback_hours
+                _evg_row = await self.db.fetch_one(
+                    "SELECT COUNT(*) AS cnt FROM trade_log "
+                    "WHERE symbol = ? AND direction = ? AND pnl_pct <= 0 "
+                    "AND julianday(closed_at) >= julianday('now', ?)",
+                    (symbol, direction, f"-{_evg_hours} hours"),
+                )
+                _evg_recent_loss_count = int((_evg_row or {}).get("cnt", 0) or 0)
+            except Exception as _evg_rl_exc:
+                log.warning(
+                    f"ENTRY_RECENT_LOSS_GATE_QUERY_FAIL | sym={symbol} "
+                    f"err_type={type(_evg_rl_exc).__name__} "
+                    f"err='{str(_evg_rl_exc)[:200]}' | {ctx()}"
+                )
+
+            _evg_rl_result = evaluate_recent_loss_gate(
+                recent_loss_count=_evg_recent_loss_count,
+                max_recent_losses=_evg_settings.max_recent_losses,
+            )
+            log.info(
+                f"ENTRY_RECENT_LOSS_GATE | sym={symbol} dir={direction} "
+                f"count={_evg_rl_result.recent_loss_count} "
+                f"lookback_h={_evg_settings.recent_loss_lookback_hours:.2f} "
+                f"thr={_evg_rl_result.threshold} mode={_evg_settings.recent_loss_mode} "
+                f"verdict={_evg_rl_result.verdict} would_block={_evg_rl_result.would_block} "
+                f"reason={_evg_rl_result.reason} | {ctx()}"
+            )
+            if _evg_settings.recent_loss_mode == "enforce" and _evg_rl_result.would_block:
+                log.warning(
+                    f"TRADE_SKIP | sym={symbol} rsn=entry_recent_loss_gate_blocked "
+                    f"detail='count={_evg_rl_result.recent_loss_count} "
+                    f"thr={_evg_rl_result.threshold} lookback_h="
+                    f"{_evg_settings.recent_loss_lookback_hours:.2f}' | {ctx()}"
+                )
+                return (False, "entry_recent_loss_gate_blocked")
 
         # ── Fix 7 (volatility-scaled stop + size haircut, 2026-06-10) ──
         # The constant ~1.5% min stop sat INSIDE volatile coins' noise band (91%

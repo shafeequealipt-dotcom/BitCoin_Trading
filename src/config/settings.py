@@ -5087,12 +5087,14 @@ class LossCuttingSettings:
 
 @dataclass
 class EntryVolumeGateSettings:
-    """Entry Quality Gates — volume-ratio (2026-07-15) + ATR (2026-07-16).
+    """Entry Quality Gates — volume-ratio (2026-07-15), ATR (2026-07-16),
+    recent-loss (2026-07-17).
 
-    Two independent entry-time gates share this settings section and the
-    ``strategy_worker`` wiring, since both read from the same TA-cache
-    call. Each has its own enable/threshold/mode so one can enforce while
-    the other observes.
+    Three independent entry-time gates share this settings section and
+    the ``strategy_worker`` wiring. Volume-ratio and ATR read from the
+    same TA-cache call; recent-loss reads a direct DB query. Each gate
+    has its own enable/threshold/mode so any one can enforce while
+    another observes.
 
     ## Volume-ratio gate (deployed, enforcing)
 
@@ -5121,10 +5123,25 @@ class EntryVolumeGateSettings:
     accepted risk — the filter partly selects *which coins are moving*
     rather than being validated within-symbol).
 
+    ## Recent-loss gate (2026-07-17)
+
+    A forensic trace of GWEIUSDT's post-ATR-gate trades found the system
+    already has TWO mechanisms meant to prevent same-direction repeat
+    losses (a brain-prompt ``RECENT_LOSER_COOLDOWN`` rule, and a scanner
+    qualitative blocker at ``recent_failure_blocker_hours=1``) — neither
+    stopped three consecutive GWEIUSDT shorts from closing at -1.76%,
+    -1.90%, -1.94% within 59 minutes of each other. One surviving thesis
+    literally reads "Despite RECENT_LOSER_COOLDOWN, the setup quality is
+    B...". The prompt rule is advisory (the model can rationalize past
+    it); the scanner blocker is upstream and can be routed around. This
+    gate is last-mile — same execution point as the other two, after
+    every upstream check has already passed. See
+    IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md §8 for the full trace.
+
     Attributes:
         enabled: Master switch for the volume-ratio gate machinery
             (observability + enforcement). False = that gate's code path
-            never runs. Does not affect the ATR gate.
+            never runs. Does not affect the ATR or recent-loss gates.
         mode: "observe" (log would_block, never skip) or "enforce"
             (actually skip trades below the threshold) — volume-ratio gate.
         min_volume_ratio: Trades with volume_ratio below this are
@@ -5134,6 +5151,16 @@ class EntryVolumeGateSettings:
         atr_mode: "observe" or "enforce" — ATR gate.
         min_atr_pct: Trades with entry ATR% below this are flagged/blocked
             (dead-tape floor). 0 = no-op kill switch.
+        recent_loss_enabled: Master switch for the recent-loss gate.
+        recent_loss_mode: "observe" or "enforce" — recent-loss gate.
+        recent_loss_lookback_hours: Window to count losses on the same
+            (symbol, direction) pair. Matches the existing (advisory)
+            RECENT_LOSER_COOLDOWN rule's own "within 1h" window.
+        max_recent_losses: Block once the same-(symbol,direction) loss
+            count within the lookback reaches this many. 1 = zero-
+            tolerance re-entry (matches the prompt rule's intent
+            exactly — this gate ENFORCES what the prompt only asks for).
+            0 = no-op kill switch.
     """
     enabled: bool = True
     mode: str = "observe"
@@ -5141,6 +5168,10 @@ class EntryVolumeGateSettings:
     atr_enabled: bool = True
     atr_mode: str = "observe"
     min_atr_pct: float = 0.20
+    recent_loss_enabled: bool = True
+    recent_loss_mode: str = "observe"
+    recent_loss_lookback_hours: float = 1.0
+    max_recent_losses: int = 1
 
     def __post_init__(self) -> None:
         if self.mode not in ("observe", "enforce"):
@@ -5162,6 +5193,21 @@ class EntryVolumeGateSettings:
             raise ValueError(
                 f"entry_volume_gate.min_atr_pct must be >= 0, "
                 f"got {self.min_atr_pct}"
+            )
+        if self.recent_loss_mode not in ("observe", "enforce"):
+            raise ValueError(
+                f"entry_volume_gate.recent_loss_mode must be 'observe' or "
+                f"'enforce', got {self.recent_loss_mode!r}"
+            )
+        if self.recent_loss_lookback_hours < 0:
+            raise ValueError(
+                f"entry_volume_gate.recent_loss_lookback_hours must be >= 0, "
+                f"got {self.recent_loss_lookback_hours}"
+            )
+        if self.max_recent_losses < 0:
+            raise ValueError(
+                f"entry_volume_gate.max_recent_losses must be >= 0, "
+                f"got {self.max_recent_losses}"
             )
 
 
