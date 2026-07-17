@@ -440,6 +440,46 @@ pre-existing unrelated finding), the corrected query re-tested against
 4 points in the real GWEIUSDT sequence (all 4 match hand-computed
 expected counts exactly), 72/72 relevant tests pass (8 new).
 
-**Not yet done:** live deploy + end-to-end confirmation (pending,
-following the same restart → verify → isolated-proof → live-log-line
-procedure as Phase A).
+**Live deploy verification (2026-07-17):** pulled `b4992d9` on the VM,
+compile + config round-trip clean (`recent_loss: True enforce 1.0 1`),
+restarted `trading-workers`/`trading-brain` with zero new errors (the
+`STRAT_CALL_A_FAIL 'NoneType' object has no attribute 'get'` lines in
+brain.log predate this deploy — present since Jul 15). First live
+firing came within the hour and was a real block:
+```
+ENTRY_RECENT_LOSS_GATE | sym=KAITOUSDT dir=Buy count=1 lookback_h=1.00
+  thr=1 mode=enforce verdict=block would_block=True
+  reason=recent_loss_threshold_reached
+```
+A KAITOUSDT buy re-entry after a same-direction loss within the hour —
+the exact GWEIUSDT pattern, caught on a different coin. Zero
+`ENTRY_RECENT_LOSS_GATE_QUERY_FAIL` occurrences (the julianday fix
+holds in production).
+
+**All three gates now enforcing live:** volume-ratio @ 0.30, ATR @
+0.20, recent-loss @ max 1 same-(symbol,direction) loss per rolling
+hour.
+
+### Root-cause note (operator question, 2026-07-17): why did the brain
+### keep selling GWEIUSDT instead of buying?
+
+The buy call WAS made — by the signal layer, every time (theses read
+"despite the conflicting buy signal", "though signal is strong_buy").
+The brain overrode it because the prompt hierarchy makes per-coin
+regime + structure authoritative over the signal layer (rule 6 — a
+deliberate design to stop counter-trend bounce-buying in genuine
+downtrends). The failure mode: GWEIUSDT's `trending_down` label (0.80
+conf) was honestly earned earlier, but regime detection lags — when
+the coin reversed and rallied ~8%, the stale label kept telling the
+brain "downtrend", each rally leg got reinterpreted as "short-side
+pullback continuation" (rising price = better short entry), and the
+weak structural evidence backing the shorts (X-RAY conf 0.3-0.4 vs
+0.70 baseline) was still granted full authority. Auto-flipping to the
+signal direction was considered and rejected (contrarian auto-flip is
+its own new failure mode); the recent-loss gate implements the safer
+"stand aside on repeated same-direction losses" response instead.
+Candidate deeper fix if post-gate data still shows the pattern:
+treat repeated signal-vs-regime conflict + same-direction losses as
+evidence the regime label is stale (force a per-coin regime refresh,
+or strip regime authority for that coin temporarily). Deferred pending
+gate data.
