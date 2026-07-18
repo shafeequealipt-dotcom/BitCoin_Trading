@@ -39,19 +39,48 @@ class ClaudeClient:
     extract_json is available.
     """
 
-    def __init__(self, settings: Settings, cost_tracker: CostTracker) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        cost_tracker: CostTracker,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
+        """OpenAI-compatible LLM client.
+
+        Defaults to OpenRouter (base_url + OPENAI_API_KEY + settings.brain.model)
+        for full back-compat. The keyword overrides let the same battle-tested
+        client target any OpenAI-compatible provider — used by the "groq"
+        provider branch in workers/manager.py (2026-07-18) to point at Groq
+        without a parallel client class, since Groq speaks the identical API.
+        The provider label is derived from the base_url for accurate logging.
+        """
         self.settings = settings
         self.cost_tracker = cost_tracker
-        api_key = settings.brain.api_key or os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            log.warning("No API key set — Brain will not function")
-            api_key = "dummy"
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=OPENROUTER_BASE_URL,
+        resolved_key = (
+            api_key
+            if api_key is not None
+            else (settings.brain.api_key or os.environ.get("OPENAI_API_KEY", ""))
         )
-        self.model = settings.brain.model
-        self.max_tokens = settings.brain.max_tokens
+        if not resolved_key:
+            log.warning("No API key set — Brain will not function")
+            resolved_key = "dummy"
+        resolved_base_url = base_url or OPENROUTER_BASE_URL
+        self.client = AsyncOpenAI(
+            api_key=resolved_key,
+            base_url=resolved_base_url,
+        )
+        self.model = model if model is not None else settings.brain.model
+        self.max_tokens = (
+            max_tokens if max_tokens is not None else settings.brain.max_tokens
+        )
+        # Provider label for logs — "groq" vs "openrouter" — from the host.
+        self.provider_label = (
+            "groq" if "groq.com" in resolved_base_url else "openrouter"
+        )
         self.total_calls: int = 0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
@@ -117,8 +146,8 @@ class ClaudeClient:
             self.total_output_tokens += output_tokens
 
             log.info(
-                "OpenRouter API call: {inp} in, {out} out, cost=${cost:.4f}",
-                inp=input_tokens, out=output_tokens, cost=cost,
+                "{prov} API call: {inp} in, {out} out, cost=${cost:.4f}",
+                prov=self.provider_label, inp=input_tokens, out=output_tokens, cost=cost,
             )
 
             return response_text

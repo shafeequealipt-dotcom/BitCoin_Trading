@@ -637,6 +637,21 @@ class BrainSettings:
     glm_max_tokens: int = 8000
     glm_temperature: float = 0.3
     glm_max_retries: int = 2
+    # Brain-provider switch — "groq" (2026-07-18, operator request after the
+    # OpenRouter account ran out of credits and halted trading for ~24h).
+    # Groq is OpenAI-API-compatible, so it reuses the ClaudeClient (OpenAI
+    # SDK) path with a different base_url/key/model. llama-3.3-70b-versatile
+    # was chosen by live test: clean strict-JSON output (no chain-of-thought
+    # preamble), correct TP>=2x SL rule adherence, fastest latency (~0.7-1.2s),
+    # and the highest free-tier per-minute token limit (12000 TPM) — the only
+    # strong model whose TPM fits the real ~9-10k-token CALL_A prompt. Key
+    # comes from the GROQ_API_KEY env var. Free-tier ceiling to watch: ~1000
+    # requests/day (CALL_A + CALL_B ≈ 576/day, under the cap).
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_max_tokens: int = 4096
+    groq_temperature: float = 0.3
     # Item 2 (entry-gaps investigation, 2026-05-26): when True, the strategist
     # appends an expected-winner-magnitude advisory (MAG=HIGH/MED/LOW) to each
     # coin's volatility line in the prompt. Entry M5 volatility predicts winner
@@ -5738,6 +5753,13 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         glm_max_tokens=int(data.get("glm_max_tokens", 8000)),
         glm_temperature=float(data.get("glm_temperature", 0.3)),
         glm_max_retries=int(data.get("glm_max_retries", 2)),
+        # Groq provider (2026-07-18) — key from GROQ_API_KEY env, model + knobs
+        # from [brain] config. See BrainSettings docstring for model rationale.
+        groq_model=str(data.get("groq_model", "llama-3.3-70b-versatile")),
+        groq_api_key=_env("GROQ_API_KEY", data.get("groq_api_key", "")),
+        groq_base_url=str(data.get("groq_base_url", "https://api.groq.com/openai/v1")),
+        groq_max_tokens=int(data.get("groq_max_tokens", 4096)),
+        groq_temperature=float(data.get("groq_temperature", 0.3)),
         strategic_interval=data.get("strategic_interval", 300),
         watchdog_interval=data.get("watchdog_interval", 30),
         claude_cli_timeout_seconds=data.get("claude_cli_timeout_seconds", 300),

@@ -263,11 +263,25 @@ fear_greed_minutes = 60
 # Uses existing Claude Max subscription ($0 per call)
 enabled = true
 use_claude_code = true
-# Brain provider switch (2026-07-06, operator request): "claude_code"
-# (default above) or "glm_cloudflare" (GLM-5.2 via Cloudflare Workers AI,
-# see src/brain/glm_client.py). Set back to "claude_code" to instantly
-# revert to the battle-tested Claude Code CLI path.
-provider = "claude_code"
+# Brain provider switch. Options:
+#   "claude_code"    → OpenRouter (OpenAI-compatible) via ClaudeClient, model=
+#                      the [brain] `model` key below (deepseek). The historical
+#                      default; the "else" branch in workers/manager.py.
+#   "glm_cloudflare" → GLM-5.2 via Cloudflare Workers AI (src/brain/glm_client.py)
+#   "groq"           → Groq (OpenAI-compatible) via ClaudeClient, model=groq_model
+#                      below. Key from GROQ_API_KEY env var.
+# 2026-07-18: switched to "groq" after the OpenRouter account ran out of
+# credits and halted trading for ~24h (every CALL_A got HTTP 402). Revert
+# instantly by setting this back to "claude_code" (needs OpenRouter credit).
+provider = "groq"
+# Groq model chosen by live test (2026-07-18): llama-3.3-70b-versatile —
+# clean strict-JSON (no chain-of-thought preamble like qwen), correct
+# TP>=2x SL adherence, fastest latency, and the only strong model whose
+# free-tier 12000 TPM fits the real ~9-10k-token CALL_A prompt (gpt-oss-120b
+# is smarter but capped at 8000 TPM). Watch the ~1000 requests/day ceiling.
+groq_model = "llama-3.3-70b-versatile"
+groq_max_tokens = 4096
+groq_temperature = 0.3
 glm_model = "@cf/zai-org/glm-5.2"
 # GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
 # before the final answer. max_tokens must cover both or content truncates

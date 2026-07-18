@@ -520,6 +520,27 @@ class WorkerManager:
                     f"Using GLM-5.2 via Cloudflare Workers AI as brain provider "
                     f"(model={_brain_cfg.glm_model})"
                 )
+            elif _brain_cfg.provider == "groq":
+                # Groq (2026-07-18) — OpenAI-API-compatible, so it reuses the
+                # ClaudeClient (OpenAI SDK) path with Groq's base_url/key/model
+                # instead of a parallel client class. Switched to after the
+                # OpenRouter account ran out of credits and halted trading.
+                from src.brain.claude_client import ClaudeClient
+
+                claude_client = ClaudeClient(
+                    settings=self.settings,
+                    cost_tracker=cost_tracker,
+                    base_url=_brain_cfg.groq_base_url,
+                    api_key=_brain_cfg.groq_api_key,
+                    model=_brain_cfg.groq_model,
+                    max_tokens=_brain_cfg.groq_max_tokens,
+                )
+                self._services["claude_client"] = claude_client
+                _key_present = bool(_brain_cfg.groq_api_key)
+                log.info(
+                    f"Using Groq API client (model={claude_client.model}, "
+                    f"key_present={_key_present})"
+                )
             else:
                 from src.brain.claude_client import ClaudeClient
 
