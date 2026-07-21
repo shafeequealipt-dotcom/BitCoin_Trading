@@ -280,7 +280,17 @@ provider = "groq"
 # free-tier 12000 TPM fits the real ~9-10k-token CALL_A prompt (gpt-oss-120b
 # is smarter but capped at 8000 TPM). Watch the ~1000 requests/day ceiling.
 groq_model = "llama-3.3-70b-versatile"
-groq_max_tokens = 4096
+# groq_max_tokens is RESERVED against Groq's 12000 TPM budget on every call
+# (Groq counts input + max_tokens toward the per-minute token limit). The real
+# CALL_A prompt is ~10.5k input tokens, so the original 4096 reservation pushed
+# the request to ~14.5k and hit HTTP 413 "Request too large ... Limit 12000"
+# (2026-07-18). llama-3.3-70b's actual CALL_A output is only ~300 tokens
+# (measured in the pre-deploy test), so 1024 is ample for output AND leaves
+# ~500 tokens of input headroom under the 12000 TPM ceiling. Free-tier note:
+# this fits an isolated CALL_A; a CALL_A+CALL_B collision in the same ~few
+# seconds can still transiently exceed TPM (the client retries). Groq Dev Tier
+# removes the ceiling if the free tier proves too tight.
+groq_max_tokens = 1024
 groq_temperature = 0.3
 glm_model = "@cf/zai-org/glm-5.2"
 # GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
