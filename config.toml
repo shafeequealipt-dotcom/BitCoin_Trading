@@ -290,7 +290,7 @@ groq_model = "llama-3.3-70b-versatile"
 # this fits an isolated CALL_A; a CALL_A+CALL_B collision in the same ~few
 # seconds can still transiently exceed TPM (the client retries). Groq Dev Tier
 # removes the ceiling if the free tier proves too tight.
-groq_max_tokens = 1024
+groq_max_tokens = 768
 groq_temperature = 0.3
 glm_model = "@cf/zai-org/glm-5.2"
 # GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
@@ -633,7 +633,7 @@ boot_grace_completeness = 0.80
 # 0.11%/round-trip across ~340 trades/day) and raises the average candidate
 # bar (top-3 by interestingness vs top-5). Also further shrinks the prompt.
 # Rollback: raise back to 5.
-top_n_to_brain = 3
+top_n_to_brain = 2
 # Stage 2 phase 5 live trial (2026-05-05) — 3 flags flipped ON together.
 # Activates: rich Layer 1B/1C per-coin block (Phase 2),
 #            strict bounded-count trade contract (Phase 3 — currently
@@ -664,7 +664,7 @@ per_coin_direction_enabled = true
 # the flag has no effect. The bigger architectural win (Anthropic
 # prompt caching) is documented as deferred in
 # dev_notes/sniper_latency_size_fix/phase2d_caching_finding.md.
-enable_prompt_compression = false
+enable_prompt_compression = true
 # Candidate-Block Data Integrity Fix — Issue 3 (2026-06-09) — decimal places for
 # the per-coin "Components:" line. Default 4 (was a hardcoded 3, which rounded a
 # real funding rate like -0.0002 to -0.000). Matches the "Funding:" line so a
