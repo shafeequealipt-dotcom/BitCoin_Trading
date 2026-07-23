@@ -467,9 +467,16 @@ recent_loss_max_lessons = 2
 # loss-lesson "Cause:" excerpt (was a hard 57-char cut that dropped the failure
 # pattern mid-sentence). Clause/sentence-boundary aware so it never cuts a word.
 tias_cause_max_chars = 120
-# Strategic review interval (seconds) — alternating Call A (trades) / Call B (positions)
-# 150s = 2.5 min between calls, giving 5 min per call type
-strategic_interval = 150
+# Strategic review interval (seconds) — alternating Call A (trades) / Call B (positions).
+# 2026-07-23: slowed 150s -> 2700s (45 min) to fit Cloudflare Workers AI's free
+# 10,000 Neurons/day tier after switching providers (see commit 9bda288). Measured
+# live cost: ~273 Neurons/call (gpt-oss-20b, ~8.5k in + ~4.3k out tokens). At 2700s,
+# 32 calls/day x ~273 = ~8736 Neurons/day (~87% of budget, margin for variance).
+# Position protection (SL/TP/stall-cuts) is UNAFFECTED -- PositionWatchdog runs on
+# its own much faster watchdog_interval (30s) independent of this. Only the brain's
+# own new-trade-finding (Call A) and AI position-review (Call B) cadence slows.
+# Revert to 150 (or enable Cloudflare paid, ~$1.73/day) to restore the 5-min cadence.
+strategic_interval = 2700
 # Watchdog Claude review interval (seconds) — reviews positions every 30s
 watchdog_interval = 30
 # Legacy settings kept for backward compatibility
