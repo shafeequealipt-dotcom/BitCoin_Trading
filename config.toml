@@ -273,7 +273,7 @@ use_claude_code = true
 # 2026-07-18: switched to "groq" after the OpenRouter account ran out of
 # credits and halted trading for ~24h (every CALL_A got HTTP 402). Revert
 # instantly by setting this back to "claude_code" (needs OpenRouter credit).
-provider = "groq"
+provider = "glm_cloudflare"
 # Groq model chosen by live test (2026-07-18): llama-3.3-70b-versatile —
 # clean strict-JSON (no chain-of-thought preamble like qwen), correct
 # TP>=2x SL adherence, fastest latency, and the only strong model whose
@@ -292,7 +292,7 @@ groq_model = "llama-3.3-70b-versatile"
 # removes the ceiling if the free tier proves too tight.
 groq_max_tokens = 768
 groq_temperature = 0.3
-glm_model = "@cf/zai-org/glm-5.2"
+glm_model = "@cf/openai/gpt-oss-20b"
 # GLM-5.2 is a reasoning model — hidden chain-of-thought consumes tokens
 # before the final answer. max_tokens must cover both or content truncates
 # empty. timeout is generous since reasoning models are slower than Claude.
