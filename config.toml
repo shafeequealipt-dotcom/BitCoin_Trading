@@ -482,14 +482,22 @@ recent_loss_max_lessons = 2
 tias_cause_max_chars = 120
 # Strategic review interval (seconds) — alternating Call A (trades) / Call B (positions).
 # 2026-07-23: slowed 150s -> 2700s (45 min) to fit Cloudflare Workers AI's free
-# 10,000 Neurons/day tier after switching providers (see commit 9bda288). Measured
-# live cost: ~273 Neurons/call (gpt-oss-20b, ~8.5k in + ~4.3k out tokens). At 2700s,
-# 32 calls/day x ~273 = ~8736 Neurons/day (~87% of budget, margin for variance).
+# 10,000 Neurons/day tier (see commit 9bda288). Measured live cost: ~273
+# Neurons/call, 32 calls/day = ~87% of budget.
+# 2026-07-25: restored 2700s -> 150s after switching provider to ZenMux
+# (inclusionai/ling-3.0-flash, $0/M tokens, no tiered/conditional pricing
+# and no published daily cap unlike Cloudflare's 10k Neurons/day or Groq's
+# 100k TPD). Empirically probed: 8 back-to-back ~7.7k-token calls (the same
+# ballpark as a real CALL_A prompt) in under 90s, zero errors, zero 429s --
+# well beyond what 150s cadence (one call per 150s) would ever produce. No
+# published daily cap exists to budget against the way Cloudflare/Groq's
+# did, so this is evidence-based rather than a documented-budget fit; watch
+# workers.log for 429s the same way Groq's undocumented TPD cap was only
+# caught live, and tighten back toward 2700 if that happens.
 # Position protection (SL/TP/stall-cuts) is UNAFFECTED -- PositionWatchdog runs on
 # its own much faster watchdog_interval (30s) independent of this. Only the brain's
-# own new-trade-finding (Call A) and AI position-review (Call B) cadence slows.
-# Revert to 150 (or enable Cloudflare paid, ~$1.73/day) to restore the 5-min cadence.
-strategic_interval = 2700
+# own new-trade-finding (Call A) and AI position-review (Call B) cadence changes.
+strategic_interval = 150
 # Watchdog Claude review interval (seconds) — reviews positions every 30s
 watchdog_interval = 30
 # Legacy settings kept for backward compatibility
@@ -653,7 +661,13 @@ boot_grace_completeness = 0.80
 # 0.11%/round-trip across ~340 trades/day) and raises the average candidate
 # bar (top-3 by interestingness vs top-5). Also further shrinks the prompt.
 # Rollback: raise back to 5.
-top_n_to_brain = 2
+# 2026-07-23: further cut 3 -> 2 specifically to fit Groq free-tier 12000 TPM
+# (see commit f23da19) -- a rate-limit workaround, not a win-rate decision.
+# 2026-07-25: restored 2 -> 3 (the pre-Groq, win-rate-driven value) after
+# switching provider to ZenMux, which showed no TPM-class constraint in an
+# 8-call burst test at ~7.7k tokens/call. The win-rate-driven 5 -> 3 cut
+# above still stands; only the Groq-specific extra cut is reverted.
+top_n_to_brain = 3
 # Stage 2 phase 5 live trial (2026-05-05) — 3 flags flipped ON together.
 # Activates: rich Layer 1B/1C per-coin block (Phase 2),
 #            strict bounded-count trade contract (Phase 3 — currently
