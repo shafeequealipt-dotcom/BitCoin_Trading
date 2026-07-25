@@ -77,10 +77,15 @@ class ClaudeClient:
         self.max_tokens = (
             max_tokens if max_tokens is not None else settings.brain.max_tokens
         )
-        # Provider label for logs — "groq" vs "openrouter" — from the host.
-        self.provider_label = (
-            "groq" if "groq.com" in resolved_base_url else "openrouter"
-        )
+        # Provider label for logs — derived from the host so a new
+        # OpenAI-compatible host (groq, zenmux, ...) doesn't silently log as
+        # "openrouter" (2026-07-25: caught when wiring up zenmux).
+        if "groq.com" in resolved_base_url:
+            self.provider_label = "groq"
+        elif "zenmux.ai" in resolved_base_url:
+            self.provider_label = "zenmux"
+        else:
+            self.provider_label = "openrouter"
         self.total_calls: int = 0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0

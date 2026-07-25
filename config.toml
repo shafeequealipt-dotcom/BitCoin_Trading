@@ -270,10 +270,23 @@ use_claude_code = true
 #   "glm_cloudflare" → GLM-5.2 via Cloudflare Workers AI (src/brain/glm_client.py)
 #   "groq"           → Groq (OpenAI-compatible) via ClaudeClient, model=groq_model
 #                      below. Key from GROQ_API_KEY env var.
+#   "zenmux"         → ZenMux (OpenAI-compatible) via ClaudeClient, model=
+#                      zenmux_model below. Key from ZENMUX_API_KEY env var.
 # 2026-07-18: switched to "groq" after the OpenRouter account ran out of
-# credits and halted trading for ~24h (every CALL_A got HTTP 402). Revert
-# instantly by setting this back to "claude_code" (needs OpenRouter credit).
-provider = "glm_cloudflare"
+# credits and halted trading for ~24h (every CALL_A got HTTP 402).
+# 2026-07-25: switched to "zenmux" for more usable free-tier headroom than
+# Groq's 100k TPD cap and Cloudflare's shared 10k Neurons/day. Model
+# inclusionai/ling-3.0-flash chosen by live test: 2/2 correct direction +
+# SL/TP sides + R:R math across a LONG and SHORT setup, and the only
+# candidate (vs z-ai/glm-4.7-flash-free and paid moonshotai/kimi-k3) that
+# got risk-based position sizing exactly right both times. Non-reasoning
+# model — no reasoning-token-truncation risk (the failure class that hit
+# both glm-4.7-flash-free and Cloudflare's GLM-5.2). Revert instantly by
+# setting this back to "glm_cloudflare" or "claude_code".
+provider = "zenmux"
+zenmux_model = "inclusionai/ling-3.0-flash"
+zenmux_max_tokens = 2048
+zenmux_temperature = 0.3
 # Groq model chosen by live test (2026-07-18): llama-3.3-70b-versatile —
 # clean strict-JSON (no chain-of-thought preamble like qwen), correct
 # TP>=2x SL adherence, fastest latency, and the only strong model whose

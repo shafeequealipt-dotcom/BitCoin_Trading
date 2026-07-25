@@ -652,6 +652,25 @@ class BrainSettings:
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_max_tokens: int = 4096
     groq_temperature: float = 0.3
+    # Brain-provider switch — "zenmux" (2026-07-25, operator request for a
+    # gateway with more usable free-tier headroom than Groq's 100k TPD cap).
+    # ZenMux is OpenAI-API-compatible, same ClaudeClient reuse pattern as
+    # Groq. inclusionai/ling-3.0-flash chosen by live test (2 for 2 on
+    # direction/SL-TP-side/R:R correctness across a LONG and SHORT setup,
+    # and the only candidate that got risk-based position sizing exactly
+    # right both times) over z-ai/glm-4.7-flash-free (reasoning model —
+    # truncated at 1024 max_tokens, got sizing wrong even at 6000) and
+    # moonshotai/kimi-k3 (paid, ~$0.03-0.08/call, occasional 90s+ timeout).
+    # Non-reasoning model, so no reasoning-token-truncation risk (the
+    # failure class hit twice this session with GLM-shaped reasoning
+    # models). Key comes from the ZENMUX_API_KEY env var. Free-tier daily
+    # cap not published by ZenMux — watch for 429s post-deploy the same
+    # way Groq's undocumented TPD cap was only discovered live.
+    zenmux_model: str = "inclusionai/ling-3.0-flash"
+    zenmux_api_key: str = ""
+    zenmux_base_url: str = "https://zenmux.ai/api/v1"
+    zenmux_max_tokens: int = 2048
+    zenmux_temperature: float = 0.3
     # Item 2 (entry-gaps investigation, 2026-05-26): when True, the strategist
     # appends an expected-winner-magnitude advisory (MAG=HIGH/MED/LOW) to each
     # coin's volatility line in the prompt. Entry M5 volatility predicts winner
@@ -5832,6 +5851,13 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         groq_base_url=str(data.get("groq_base_url", "https://api.groq.com/openai/v1")),
         groq_max_tokens=int(data.get("groq_max_tokens", 4096)),
         groq_temperature=float(data.get("groq_temperature", 0.3)),
+        # ZenMux provider (2026-07-25) — key from ZENMUX_API_KEY env, model +
+        # knobs from [brain] config. See BrainSettings docstring for rationale.
+        zenmux_model=str(data.get("zenmux_model", "inclusionai/ling-3.0-flash")),
+        zenmux_api_key=_env("ZENMUX_API_KEY", data.get("zenmux_api_key", "")),
+        zenmux_base_url=str(data.get("zenmux_base_url", "https://zenmux.ai/api/v1")),
+        zenmux_max_tokens=int(data.get("zenmux_max_tokens", 2048)),
+        zenmux_temperature=float(data.get("zenmux_temperature", 0.3)),
         strategic_interval=data.get("strategic_interval", 300),
         watchdog_interval=data.get("watchdog_interval", 30),
         claude_cli_timeout_seconds=data.get("claude_cli_timeout_seconds", 300),

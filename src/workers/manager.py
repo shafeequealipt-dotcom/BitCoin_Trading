@@ -541,6 +541,26 @@ class WorkerManager:
                     f"Using Groq API client (model={claude_client.model}, "
                     f"key_present={_key_present})"
                 )
+            elif _brain_cfg.provider == "zenmux":
+                # ZenMux (2026-07-25) — OpenAI-API-compatible, same
+                # ClaudeClient reuse pattern as Groq. Switched to for higher
+                # usable free-tier headroom than Groq's 100k TPD cap.
+                from src.brain.claude_client import ClaudeClient
+
+                claude_client = ClaudeClient(
+                    settings=self.settings,
+                    cost_tracker=cost_tracker,
+                    base_url=_brain_cfg.zenmux_base_url,
+                    api_key=_brain_cfg.zenmux_api_key,
+                    model=_brain_cfg.zenmux_model,
+                    max_tokens=_brain_cfg.zenmux_max_tokens,
+                )
+                self._services["claude_client"] = claude_client
+                _key_present = bool(_brain_cfg.zenmux_api_key)
+                log.info(
+                    f"Using ZenMux API client (model={claude_client.model}, "
+                    f"key_present={_key_present})"
+                )
             else:
                 from src.brain.claude_client import ClaudeClient
 
