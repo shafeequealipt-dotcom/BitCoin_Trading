@@ -4360,6 +4360,71 @@ class WorkerLivenessSettings:
 
 
 @dataclass
+class BrainLivenessSettings:
+    """BrainLivenessWatchdog tunables (2026-07-25 — cross-process hang detection).
+
+    Companion to WorkerLivenessSettings, but for the SEPARATE trading-brain
+    process (different systemd unit, different event loop — the in-process
+    WorkerLivenessTracker has no visibility into it). Built after a 28h+
+    real-world hang: trading-brain got permanently stuck on one ``await``
+    inside its A/B review loop with zero exceptions and zero log lines —
+    systemd reported the process as healthy the whole time. See
+    src/core/brain_liveness.py module docstring for the full incident and
+    why a heartbeat file (not exception-based detection) is the only
+    mechanism that catches this failure mode.
+
+    Attributes:
+        enabled: Master switch. False = the watchdog worker is never
+            constructed (see ``_build_brain_liveness`` / manager.py wiring).
+        watchdog_interval_sec: How often this worker checks the heartbeat
+            file. Default 60. Validated >= 10.
+        staleness_multiplier: The staleness threshold is derived from
+            ``settings.brain.strategic_interval × staleness_multiplier``
+            (via ``compute_staleness_threshold``) rather than a fixed
+            constant, so it auto-adapts if the operator changes the
+            brain's cadence (which has already happened once — 150s ->
+            2700s on 2026-07-23 to fit a free-tier LLM budget). Default
+            2.5 — tolerates one slow/retried cycle without a false alarm.
+            Validated >= 1.2 (below that, ordinary LLM latency variance
+            would false-alarm).
+        staleness_floor_sec: Minimum threshold regardless of the computed
+            value, so a very fast-cadence config doesn't alarm on normal
+            LLM response-time variance. Default 600 (10 min). Validated
+            >= 60.
+        alert_rate_limit_sec: Minimum seconds between Telegram alerts
+            for a stale-brain condition. Default 3600 (1 hour).
+            Validated >= 60.
+    """
+    enabled: bool = True
+    watchdog_interval_sec: float = 60.0
+    staleness_multiplier: float = 2.5
+    staleness_floor_sec: float = 600.0
+    alert_rate_limit_sec: float = 3600.0
+
+    def __post_init__(self) -> None:
+        if self.watchdog_interval_sec < 10.0:
+            raise ValueError(
+                f"brain_liveness.watchdog_interval_sec must be >= 10, "
+                f"got {self.watchdog_interval_sec}"
+            )
+        if self.staleness_multiplier < 1.2:
+            raise ValueError(
+                f"brain_liveness.staleness_multiplier must be >= 1.2, "
+                f"got {self.staleness_multiplier}"
+            )
+        if self.staleness_floor_sec < 60.0:
+            raise ValueError(
+                f"brain_liveness.staleness_floor_sec must be >= 60, "
+                f"got {self.staleness_floor_sec}"
+            )
+        if self.alert_rate_limit_sec < 60.0:
+            raise ValueError(
+                f"brain_liveness.alert_rate_limit_sec must be >= 60, "
+                f"got {self.alert_rate_limit_sec}"
+            )
+
+
+@dataclass
 class SignalGeneratorMultiSourceSettings:
     """Phase 1 (output-quality) — multi-source signal classification.
 
@@ -5304,6 +5369,8 @@ class Settings:
     layer_manager: LayerManagerSettings = field(default_factory=LayerManagerSettings)
     # Phase 11 (dead-workers fix) — WorkerLivenessWatchdog tunables.
     worker_liveness: WorkerLivenessSettings = field(default_factory=WorkerLivenessSettings)
+    # 2026-07-25 (cross-process hang fix) — BrainLivenessWatchdog tunables.
+    brain_liveness: BrainLivenessSettings = field(default_factory=BrainLivenessSettings)
     # Phase 1 (output-quality) — SignalGenerator multi-source classification.
     signal_generator: SignalGeneratorSettings = field(default_factory=SignalGeneratorSettings)
     # Phase 5 (output-quality) — CoinPackage validator thresholds.
@@ -5449,6 +5516,10 @@ class Settings:
         worker_liveness_cfg = _build_worker_liveness(
             toml_data.get("worker_liveness", {}),
         )
+        # 2026-07-25 (cross-process hang fix) — BrainLivenessWatchdog tunables.
+        brain_liveness_cfg = _build_brain_liveness(
+            toml_data.get("brain_liveness", {}),
+        )
         # Phase 1 (output-quality) — SignalGenerator multi-source classification.
         signal_generator_cfg = _build_signal_generator(
             toml_data.get("signal_generator", {}),
@@ -5510,6 +5581,7 @@ class Settings:
             observability=observability_cfg,
             layer_manager=layer_manager_cfg,
             worker_liveness=worker_liveness_cfg,
+            brain_liveness=brain_liveness_cfg,
             signal_generator=signal_generator_cfg,
             coin_package_validator=coin_package_validator_cfg,
             entry_volume_gate=entry_volume_gate_cfg,
@@ -6853,6 +6925,22 @@ def _build_worker_liveness(data: dict[str, Any]) -> WorkerLivenessSettings:
         watchdog_interval_sec=float(data.get("watchdog_interval_sec", 30.0)),
         first_tick_grace_sec=float(data.get("first_tick_grace_sec", 90.0)),
         overdue_multiplier=float(data.get("overdue_multiplier", 2.0)),
+        alert_rate_limit_sec=float(data.get("alert_rate_limit_sec", 3600.0)),
+    )
+
+
+def _build_brain_liveness(data: dict[str, Any]) -> BrainLivenessSettings:
+    """Build BrainLivenessSettings from [brain_liveness] TOML section.
+
+    2026-07-25 (cross-process hang fix). Defaults: enabled, 60s probe
+    cadence, 2.5x strategic_interval staleness multiplier (10 min floor),
+    1 hour alert rate-limit. Missing keys fall back to dataclass defaults.
+    """
+    return BrainLivenessSettings(
+        enabled=bool(data.get("enabled", True)),
+        watchdog_interval_sec=float(data.get("watchdog_interval_sec", 60.0)),
+        staleness_multiplier=float(data.get("staleness_multiplier", 2.5)),
+        staleness_floor_sec=float(data.get("staleness_floor_sec", 600.0)),
         alert_rate_limit_sec=float(data.get("alert_rate_limit_sec", 3600.0)),
     )
 

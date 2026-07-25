@@ -27,6 +27,37 @@ log = get_logger("layer_manager")
 # Persistent state file — survives process restarts
 _STATE_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "layer_state.json"
 
+# Brain liveness heartbeat (2026-07-25) — cross-process hang detection. See
+# src/core/brain_liveness.py module docstring for why this exists (a 28h+
+# silent hang with zero exceptions/log lines went undetected until an
+# operator asked "what's the status"). Written by _brain_review_loop at the
+# START of every iteration; read by BrainLivenessWatchdog running inside the
+# separate trading-workers process. Lives in trading-brain's process only —
+# trading-workers never writes it.
+_HEARTBEAT_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "brain_heartbeat.json"
+
+
+def _write_brain_heartbeat(loop_iteration: int) -> None:
+    """Atomically write the current time to the brain heartbeat file.
+
+    Best-effort: a failure here must never break the brain loop itself —
+    the whole point of this file is to detect when the loop is stuck, so
+    a bug in the heartbeat write path must not become a NEW way to hang.
+    Atomic (tmp + rename) so BrainLivenessWatchdog never reads a
+    partially-written file.
+    """
+    try:
+        _HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _HEARTBEAT_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({
+            "timestamp": time.time(),
+            "iso": datetime.now(timezone.utc).isoformat(),
+            "loop_iteration": loop_iteration,
+        }))
+        tmp.replace(_HEARTBEAT_FILE)  # atomic on POSIX
+    except Exception as e:
+        log.debug(f"BRAIN_HEARTBEAT_WRITE_FAIL | err='{str(e)[:100]}' | {ctx()}")
+
 
 @dataclass(frozen=True)
 class LayerSnapshot:
@@ -718,8 +749,23 @@ class LayerManager:
         tasks accumulate on the single event loop and starve every other
         coroutine (brain cycles degrade from ~180s to 2000s+, dashboard
         auto-refresh times out). Do NOT reintroduce event-trigger bypasses.
+
+        Liveness heartbeat (2026-07-25): written at the TOP of every
+        iteration, before ``_run_brain_cycle()`` — not after it completes.
+        A 28h+ real-world hang (zero exceptions, zero log lines, the
+        process just stuck forever inside one await) proved that
+        completion-based signals cannot detect this failure mode: if the
+        loop never finishes an iteration, a heartbeat written only on
+        success/exception never fires either. Writing at the start means
+        a stuck iteration is visible as growing staleness on the SAME
+        heartbeat that was already written for the stuck attempt — the
+        watchdog (BrainLivenessWatchdog, a separate process) doesn't need
+        the loop to ever complete to detect it's stopped progressing.
         """
+        _loop_iteration = 0
         while self._layer_active[2]:
+            _loop_iteration += 1
+            _write_brain_heartbeat(_loop_iteration)
             try:
                 await self._run_brain_cycle()
             except asyncio.CancelledError:

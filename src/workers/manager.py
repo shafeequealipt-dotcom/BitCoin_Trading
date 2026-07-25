@@ -2224,6 +2224,53 @@ class WorkerManager:
                 err=str(e)[:120],
             )
 
+        # 2026-07-25 (cross-process hang fix) — BrainLivenessWatchdog.
+        # trading-brain is a SEPARATE OS process (own systemd unit, own
+        # event loop) from trading-workers, so WorkerLivenessWatchdog above
+        # has no visibility into it. This worker reads the heartbeat file
+        # LayerManager._brain_review_loop writes (in the OTHER process) and
+        # alerts if it goes stale — the only mechanism that caught the
+        # 2026-07-23/24 28h+ silent hang (zero exceptions, zero log lines,
+        # trading-brain reported healthy by systemd the whole time). See
+        # src/core/brain_liveness.py for the full rationale.
+        try:
+            from src.workers.brain_liveness_watchdog import BrainLivenessWatchdog
+            from src.core.brain_liveness import compute_staleness_threshold
+
+            bl_settings = getattr(s, "brain_liveness", None)
+            if bl_settings is not None and bl_settings.enabled:
+                _bl_threshold = compute_staleness_threshold(
+                    strategic_interval_seconds=float(
+                        getattr(s.brain, "strategic_interval", 150) or 150
+                    ),
+                    multiplier=bl_settings.staleness_multiplier,
+                    floor_seconds=bl_settings.staleness_floor_sec,
+                )
+                brain_liveness_watchdog = BrainLivenessWatchdog(
+                    s,
+                    db,
+                    watchdog_interval_sec=float(bl_settings.watchdog_interval_sec),
+                    staleness_threshold_sec=_bl_threshold,
+                    alert_rate_limit_sec=float(bl_settings.alert_rate_limit_sec),
+                    alert_manager=self._services.get("alert_manager"),
+                )
+                self.workers.append(brain_liveness_watchdog)
+                self._services["brain_liveness_watchdog"] = brain_liveness_watchdog
+                log.info(
+                    "BRAIN_LIVENESS_WATCHDOG_INIT | threshold_s={thr:.0f} "
+                    "strategic_interval_s={si:.0f}",
+                    thr=_bl_threshold,
+                    si=float(getattr(s.brain, "strategic_interval", 150) or 150),
+                )
+        except Exception as e:
+            # Same contract as WorkerLivenessWatchdog above — construction
+            # must never block boot.
+            log.warning(
+                "BRAIN_LIVENESS_WATCHDOG_INIT_FAIL | err='{err}' | "
+                "manager_continues_without_watchdog",
+                err=str(e)[:120],
+            )
+
         for w in self.workers:
             self.health.register(w)
 

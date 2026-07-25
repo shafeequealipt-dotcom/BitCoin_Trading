@@ -3623,3 +3623,28 @@ first_tick_grace_sec = 90
 overdue_multiplier = 2.0
 alert_rate_limit_sec = 3600
 
+# ── Brain liveness watchdog (2026-07-25 — cross-process hang detection) ─
+# trading-brain is a SEPARATE process/systemd unit from trading-workers —
+# built after a 28h+ real incident (2026-07-23/24) where trading-brain got
+# stuck forever on one await (almost certainly an un-timed-out network call)
+# with ZERO exceptions, ZERO log lines, and systemd reporting it "active"
+# the whole time. Nothing caught it until an operator asked for a status
+# check by hand. This watchdog runs inside trading-workers (which stayed
+# healthy) and reads a heartbeat file trading-brain writes at the top of
+# every A/B review-loop iteration; if it goes stale, it warns + alerts
+# (detect-only, no auto-restart — an operator restarts the hung process:
+# `sudo systemctl restart trading-brain`). See src/core/brain_liveness.py.
+#
+# staleness threshold = max(staleness_floor_sec, brain.strategic_interval *
+# staleness_multiplier) — DERIVED from the brain's own cadence, not a fixed
+# constant, so it auto-adapts if strategic_interval changes again (it
+# already has once: 150s -> 2700s on 2026-07-23 to fit a free-tier LLM
+# budget). At the current 2700s interval this computes to 6750s (~112 min)
+# — catches a real hang within ~2h instead of 28h.
+[brain_liveness]
+enabled = true
+watchdog_interval_sec = 60
+staleness_multiplier = 2.5
+staleness_floor_sec = 600
+alert_rate_limit_sec = 3600
+
