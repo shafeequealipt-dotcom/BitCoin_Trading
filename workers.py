@@ -138,8 +138,14 @@ def _install_shutdown_hooks() -> None:
             "watchdog_crash_dump.log",
         )
         _crash_file = open(_crash_path, "a", buffering=1)  # noqa: SIM115 - lives for process life
-        faulthandler.register(signal.SIGABRT, file=_crash_file, all_threads=True, chain=False)
-    except (ImportError, ValueError, OSError):
+        # SIGABRT is one of faulthandler's reserved "fault" signals
+        # (SIGSEGV/SIGFPE/SIGABRT/SIGBUS/SIGILL) -- register() explicitly
+        # refuses it ("use enable() instead", RuntimeError, confirmed live
+        # 2026-08-01). enable() covers the same fixed signal set together;
+        # there's no way to ask for SIGABRT alone, but that's fine here
+        # since we only ever raise it ourselves via WatchdogSignal.
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except (ImportError, ValueError, OSError, RuntimeError):
         pass
 
 
