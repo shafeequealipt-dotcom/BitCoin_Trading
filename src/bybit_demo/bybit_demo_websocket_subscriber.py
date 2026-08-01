@@ -156,9 +156,9 @@ class BybitDemoWebSocketSubscriber:
         await self._ws.connect_private(demo=True)
         # Subscribe to all three private topics. Subscription order is
         # not significant — pybit batches subscriptions internally.
-        self._ws.subscribe_executions(self._handle_execution)
-        self._ws.subscribe_positions(self._handle_position)
-        self._ws.subscribe_orders(self._handle_order)
+        await self._ws.subscribe_executions(self._handle_execution)
+        await self._ws.subscribe_positions(self._handle_position)
+        await self._ws.subscribe_orders(self._handle_order)
         self._connected = True
         self._last_msg_received_mono = time.monotonic()
         log.info(

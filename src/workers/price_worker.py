@@ -165,7 +165,7 @@ class PriceWorker(BaseWorker):
 
         if not self._connected:
             await self.ws.connect_public()
-            self.ws.subscribe_ticker(self._tracked_symbols, self._handle_ticker_update)
+            await self.ws.subscribe_ticker(self._tracked_symbols, self._handle_ticker_update)
             self._connected = True
             # Phase 3 (P0-2 Fix C): emit a sample of subscribed symbols so
             # operators can verify the active universe is fully covered. The

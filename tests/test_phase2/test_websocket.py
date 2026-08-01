@@ -55,7 +55,7 @@ class TestWebSocketSubscriptions:
             await ws.connect_public()
 
             callback = MagicMock()
-            ws.subscribe_ticker(["BTCUSDT"], callback)
+            await ws.subscribe_ticker(["BTCUSDT"], callback)
             mock_ws.ticker_stream.assert_called_once()
 
     @pytest.mark.asyncio
@@ -68,7 +68,7 @@ class TestWebSocketSubscriptions:
             await ws.connect_public()
 
             callback = MagicMock()
-            ws.subscribe_kline("BTCUSDT", 15, callback)
+            await ws.subscribe_kline("BTCUSDT", 15, callback)
             mock_ws.kline_stream.assert_called_once()
 
     @pytest.mark.asyncio
@@ -81,14 +81,14 @@ class TestWebSocketSubscriptions:
             await ws.connect_public()
 
             callback = MagicMock()
-            ws.subscribe_orderbook("BTCUSDT", 50, callback)
+            await ws.subscribe_orderbook("BTCUSDT", 50, callback)
             mock_ws.orderbook_stream.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_subscribe_without_connection_raises(self, test_settings, test_db):
         ws = BybitWebSocket(test_settings, test_db)
         with pytest.raises(MarketDataError, match="not connected"):
-            ws.subscribe_ticker(["BTCUSDT"], lambda x: None)
+            await ws.subscribe_ticker(["BTCUSDT"], lambda x: None)
 
     @pytest.mark.asyncio
     async def test_subscribe_orders_private(self, test_settings, test_db):
@@ -100,7 +100,7 @@ class TestWebSocketSubscriptions:
             await ws.connect_private()
 
             callback = MagicMock()
-            ws.subscribe_orders(callback)
+            await ws.subscribe_orders(callback)
             mock_ws.order_stream.assert_called_once()
 
     @pytest.mark.asyncio
@@ -113,7 +113,7 @@ class TestWebSocketSubscriptions:
             await ws.connect_private()
 
             callback = MagicMock()
-            ws.subscribe_positions(callback)
+            await ws.subscribe_positions(callback)
             mock_ws.position_stream.assert_called_once()
 
 
@@ -131,7 +131,7 @@ class TestCallbackWrapping:
             def bad_callback(msg):
                 raise RuntimeError("user error")
 
-            ws.subscribe_ticker(["BTCUSDT"], bad_callback)
+            await ws.subscribe_ticker(["BTCUSDT"], bad_callback)
 
             # Get the wrapped callback that was passed to pybit
             wrapped = mock_ws.ticker_stream.call_args[1]["callback"]

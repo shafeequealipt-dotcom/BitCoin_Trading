@@ -1,5 +1,17 @@
+# DEPRECATED / DISABLED (2026-08-01) — do not re-enable without fixing
+# brain.py first. src/brain/__init__.py's BrainManager imports three
+# modules (executor.py, prompt_builder.py, scheduler.py) that were all
+# renamed to *.py.deprecated at some point and never updated; every
+# invocation of `python brain.py` (mode=scheduler) crashes deterministically
+# within ~5s at `builder = PromptBuilder(...)` with
+# `TypeError: 'NoneType' object is not callable` (reproduced live,
+# 2026-08-01). This service provided zero function -- ALL real brain
+# activity (Strategist, CALL_A/CALL_B, LLM provider calls, trade execution)
+# runs inside trading-workers.service's WorkerManager, entirely independent
+# of this process. Stopped + `systemctl disable`d on the VM 2026-08-01.
+# Kept here for history; delete once confirmed nothing references it.
 [Unit]
-Description=Trading Intelligence - Claude Brain Auto-Trading
+Description=Trading Intelligence - Claude Brain Auto-Trading (DEPRECATED)
 Documentation=https://github.com/user/trading-intelligence-mcp
 After=network-online.target trading-workers.service
 Wants=network-online.target trading-workers.service

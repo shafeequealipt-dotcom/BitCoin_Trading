@@ -151,7 +151,7 @@ def mock_signal_generator():
 def mock_bybit_ws():
     ws = MagicMock()
     ws.connect_public = AsyncMock()
-    ws.subscribe_ticker = MagicMock()
+    ws.subscribe_ticker = AsyncMock()
     ws.disconnect = AsyncMock()
     ws.is_running = True
     return ws

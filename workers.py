@@ -18,6 +18,7 @@ import sys
 from src.config.settings import Settings
 from src.config.validators import validate_config
 from src.core.logging import setup_logging, get_logger
+from src.core.sd_notify import notify_ready
 from src.database.connection import DatabaseManager
 from src.workers.manager import WorkerManager
 
@@ -121,6 +122,26 @@ def _install_shutdown_hooks() -> None:
             # records the eventual exit either way.
             pass
 
+    # 2026-08-01 hang fix (Phase 2): dump every thread's stack on SIGABRT.
+    # Paired with the systemd unit's WatchdogSignal=SIGABRT -- when the
+    # systemd watchdog (WatchdogSec=) kills a frozen process, it now
+    # leaves a stack trace on disk automatically instead of the operator
+    # needing a live py-spy dump within the freeze window (the 2026-07-27
+    # -> 08-01 hang was only root-caused because we happened to catch it
+    # still frozen 5 days later -- this makes that luck unnecessary next
+    # time). faulthandler needs a real, persistently-open file handle;
+    # the fd is intentionally never closed (process-lifetime resource).
+    try:
+        import faulthandler
+        _crash_path = os.path.join(
+            (_SHUTDOWN_LOG_PATH and os.path.dirname(_SHUTDOWN_LOG_PATH)) or "data/logs",
+            "watchdog_crash_dump.log",
+        )
+        _crash_file = open(_crash_path, "a", buffering=1)  # noqa: SIM115 - lives for process life
+        faulthandler.register(signal.SIGABRT, file=_crash_file, all_threads=True, chain=False)
+    except (ImportError, ValueError, OSError):
+        pass
+
 
 def _load_persisted_universe(settings, log, state_path: str = "data/universe_state.json") -> None:
     """Phase 2 (daily universe refresh): at boot, if the feature is enabled
@@ -194,6 +215,12 @@ async def main() -> None:
 
     try:
         await manager.initialize()
+        # 2026-08-01 hang fix (Phase 2): tell systemd we're up. Paired with
+        # Type=notify + WatchdogSec in the unit file -- the periodic
+        # WATCHDOG=1 ping lives in WorkerManager._system_health_loop,
+        # the one task explicitly designed to stay reactive even when
+        # every worker is stuck. See src/core/sd_notify.py.
+        notify_ready()
         await manager.start_all()
     except KeyboardInterrupt:
         log.info("Keyboard interrupt received")

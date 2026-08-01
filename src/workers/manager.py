@@ -7,6 +7,7 @@ from src.config.settings import Settings
 from src.core.health_monitor import SystemHealthMonitor
 from src.core.log_context import ctx
 from src.core.logging import get_logger
+from src.core.sd_notify import notify_watchdog
 from src.database.connection import DatabaseManager
 from src.database.migrations import run_migrations
 from src.workers.base_worker import BaseWorker
@@ -3673,6 +3674,17 @@ class WorkerManager:
                     log.error(
                         f"SYSTEM_HEALTH_ERR | err='{str(e)[:150]}' | {ctx()}"
                     )
+                # 2026-08-01 hang fix (Phase 2): pet systemd's watchdog every
+                # cycle this loop is reached, independent of whether check()
+                # itself succeeded. This loop is the one task documented to
+                # "remain reactive even when every worker is stuck" -- if
+                # the WHOLE event loop wedges (as it did 2026-07-27, on a
+                # blocking pybit call now fixed in src/trading/websocket.py),
+                # this ping simply stops, and systemd (external to this
+                # process, so it cannot freeze with it) kills + restarts us
+                # after WatchdogSec. No-op unless run under systemd
+                # Type=notify. See src/core/sd_notify.py.
+                notify_watchdog()
                 # Sleep-or-shutdown: exits the wait immediately if the event
                 # is set, so shutdown is responsive.
                 try:

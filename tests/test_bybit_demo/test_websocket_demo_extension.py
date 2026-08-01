@@ -92,7 +92,8 @@ async def test_connect_private_demo_missing_creds_raises_loudly() -> None:
         await ws.connect_private(demo=True)
 
 
-def test_subscribe_executions_routes_to_pybit_execution_stream() -> None:
+@pytest.mark.asyncio
+async def test_subscribe_executions_routes_to_pybit_execution_stream() -> None:
     settings = _make_settings()
     ws = BybitWebSocket(settings, MagicMock())
 
@@ -104,7 +105,7 @@ def test_subscribe_executions_routes_to_pybit_execution_stream() -> None:
     def my_callback(message):
         cb_called.append(message)
 
-    ws.subscribe_executions(my_callback)
+    await ws.subscribe_executions(my_callback)
 
     fake_pybit_ws.execution_stream.assert_called_once()
     # Verify the callback is wrapped (not the raw user callback) — wrap
@@ -117,10 +118,11 @@ def test_subscribe_executions_routes_to_pybit_execution_stream() -> None:
     assert cb_called == [{"data": "test"}]
 
 
-def test_subscribe_executions_raises_when_not_connected() -> None:
+@pytest.mark.asyncio
+async def test_subscribe_executions_raises_when_not_connected() -> None:
     settings = _make_settings()
     ws = BybitWebSocket(settings, MagicMock())
     # _private_ws is None by default
 
     with pytest.raises(MarketDataError, match="Private WebSocket not connected"):
-        ws.subscribe_executions(lambda m: None)
+        await ws.subscribe_executions(lambda m: None)

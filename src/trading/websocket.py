@@ -5,6 +5,7 @@ WebSocket connections with auto-reconnect and heartbeat support.
 """
 
 import asyncio
+import functools
 from typing import Any, Callable
 
 from src.config.settings import Settings
@@ -13,6 +14,46 @@ from src.core.logging import get_logger
 from src.database.connection import DatabaseManager
 
 log = get_logger("trading")
+
+# 2026-08-01 hang fix: pybit 5.16.1's subscribe() enters an unbounded
+# ``while not self.is_connected(): time.sleep(0.1)`` spin when the
+# connection drops between reconnect and re-subscribe (pybit/
+# _websocket_stream.py:384). That call runs synchronously inline on our
+# asyncio event loop, so when it never returns, the WHOLE process freezes
+# with it -- every worker, all DB writes, both in-process watchdogs. Root
+# cause of the 2026-07-27 -> 08-01 (~5 day) silent hang, found via py-spy
+# dump of the frozen process. Every pybit subscribe call is now run on a
+# disposable thread bounded by _PYBIT_CALL_TIMEOUT_SECONDS; a wedged call
+# becomes a logged, retryable failure instead of a dead process. An
+# abandoned thread costs nothing (it's just sleep-spinning) and cannot
+# block shutdown since it is never joined.
+_PYBIT_CALL_TIMEOUT_SECONDS: float = 30.0
+# The WebSocket(...) constructor does its own internal retry loop (default
+# retries=10, pybit/_websocket_stream.py:39) with real network handshake
+# latency per attempt -- give it more headroom than a subscribe call before
+# treating it as wedged.
+_PYBIT_CONNECT_TIMEOUT_SECONDS: float = 60.0
+
+
+async def _run_pybit_call(fn: Callable, *, timeout: float = _PYBIT_CALL_TIMEOUT_SECONDS) -> Any:
+    """Run a synchronous pybit call on a worker thread with a hard timeout.
+
+    Raises:
+        MarketDataError: On timeout. The underlying thread is abandoned
+            (not joined/cancelled -- Python threads cannot be killed), but
+            since the only thing it does is spin on ``time.sleep(0.1)``
+            checking a connection flag, an orphaned thread is harmless.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise MarketDataError(
+            f"pybit call did not complete within {timeout}s (likely wedged in "
+            f"subscribe()'s connection-wait loop) -- abandoning the blocked "
+            f"thread and surfacing as a retryable failure",
+            details={"timeout_s": timeout},
+        )
 
 
 class BybitWebSocket:
@@ -50,9 +91,13 @@ class BybitWebSocket:
         from pybit.unified_trading import WebSocket
 
         try:
-            self._public_ws = WebSocket(
-                testnet=self._settings.bybit.testnet,
-                channel_type="linear",
+            self._public_ws = await _run_pybit_call(
+                functools.partial(
+                    WebSocket,
+                    testnet=self._settings.bybit.testnet,
+                    channel_type="linear",
+                ),
+                timeout=_PYBIT_CONNECT_TIMEOUT_SECONDS,
             )
             self._running = True
             self._reconnect_attempts = 0
@@ -114,12 +159,16 @@ class BybitWebSocket:
             )
 
         try:
-            self._private_ws = WebSocket(
-                testnet=testnet,
-                channel_type="private",
-                api_key=api_key,
-                api_secret=api_secret,
-                demo=demo,
+            self._private_ws = await _run_pybit_call(
+                functools.partial(
+                    WebSocket,
+                    testnet=testnet,
+                    channel_type="private",
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    demo=demo,
+                ),
+                timeout=_PYBIT_CONNECT_TIMEOUT_SECONDS,
             )
             log.info(
                 "Private WebSocket connected | cluster={c} demo={d}",
@@ -131,7 +180,7 @@ class BybitWebSocket:
                 details={"error": str(e), "demo": demo, "cluster": cluster},
             )
 
-    def subscribe_ticker(self, symbols: list[str], callback: Callable) -> None:
+    async def subscribe_ticker(self, symbols: list[str], callback: Callable) -> None:
         """Subscribe to real-time ticker updates for given symbols.
 
         Args:
@@ -141,13 +190,16 @@ class BybitWebSocket:
         if self._public_ws is None:
             raise MarketDataError("Public WebSocket not connected")
         for symbol in symbols:
-            self._public_ws.ticker_stream(
-                symbol=symbol,
-                callback=self._wrap_callback("ticker", callback),
+            await _run_pybit_call(
+                functools.partial(
+                    self._public_ws.ticker_stream,
+                    symbol=symbol,
+                    callback=self._wrap_callback("ticker", callback),
+                )
             )
             log.debug("Subscribed to ticker: {s}", s=symbol)
 
-    def subscribe_kline(self, symbol: str, interval: int, callback: Callable) -> None:
+    async def subscribe_kline(self, symbol: str, interval: int, callback: Callable) -> None:
         """Subscribe to real-time kline (candlestick) updates.
 
         Args:
@@ -157,14 +209,17 @@ class BybitWebSocket:
         """
         if self._public_ws is None:
             raise MarketDataError("Public WebSocket not connected")
-        self._public_ws.kline_stream(
-            interval=interval,
-            symbol=symbol,
-            callback=self._wrap_callback("kline", callback),
+        await _run_pybit_call(
+            functools.partial(
+                self._public_ws.kline_stream,
+                interval=interval,
+                symbol=symbol,
+                callback=self._wrap_callback("kline", callback),
+            )
         )
         log.debug("Subscribed to kline: {s} @ {i}m", s=symbol, i=interval)
 
-    def subscribe_orderbook(self, symbol: str, depth: int, callback: Callable) -> None:
+    async def subscribe_orderbook(self, symbol: str, depth: int, callback: Callable) -> None:
         """Subscribe to real-time orderbook updates.
 
         Args:
@@ -174,14 +229,17 @@ class BybitWebSocket:
         """
         if self._public_ws is None:
             raise MarketDataError("Public WebSocket not connected")
-        self._public_ws.orderbook_stream(
-            depth=depth,
-            symbol=symbol,
-            callback=self._wrap_callback("orderbook", callback),
+        await _run_pybit_call(
+            functools.partial(
+                self._public_ws.orderbook_stream,
+                depth=depth,
+                symbol=symbol,
+                callback=self._wrap_callback("orderbook", callback),
+            )
         )
         log.debug("Subscribed to orderbook: {s} depth={d}", s=symbol, d=depth)
 
-    def subscribe_orders(self, callback: Callable) -> None:
+    async def subscribe_orders(self, callback: Callable) -> None:
         """Subscribe to private order execution updates.
 
         Args:
@@ -189,12 +247,15 @@ class BybitWebSocket:
         """
         if self._private_ws is None:
             raise MarketDataError("Private WebSocket not connected")
-        self._private_ws.order_stream(
-            callback=self._wrap_callback("order", callback),
+        await _run_pybit_call(
+            functools.partial(
+                self._private_ws.order_stream,
+                callback=self._wrap_callback("order", callback),
+            )
         )
         log.debug("Subscribed to order updates")
 
-    def subscribe_positions(self, callback: Callable) -> None:
+    async def subscribe_positions(self, callback: Callable) -> None:
         """Subscribe to private position updates.
 
         Args:
@@ -202,12 +263,15 @@ class BybitWebSocket:
         """
         if self._private_ws is None:
             raise MarketDataError("Private WebSocket not connected")
-        self._private_ws.position_stream(
-            callback=self._wrap_callback("position", callback),
+        await _run_pybit_call(
+            functools.partial(
+                self._private_ws.position_stream,
+                callback=self._wrap_callback("position", callback),
+            )
         )
         log.debug("Subscribed to position updates")
 
-    def subscribe_executions(self, callback: Callable) -> None:
+    async def subscribe_executions(self, callback: Callable) -> None:
         """Subscribe to private execution (fill) events.
 
         Routes to pybit's ``execution_stream``. Each event carries
@@ -222,24 +286,36 @@ class BybitWebSocket:
         """
         if self._private_ws is None:
             raise MarketDataError("Private WebSocket not connected")
-        self._private_ws.execution_stream(
-            callback=self._wrap_callback("execution", callback),
+        await _run_pybit_call(
+            functools.partial(
+                self._private_ws.execution_stream,
+                callback=self._wrap_callback("execution", callback),
+            )
         )
         log.debug("Subscribed to execution updates")
 
     async def disconnect(self) -> None:
-        """Close all WebSocket connections gracefully."""
+        """Close all WebSocket connections gracefully.
+
+        pybit's ``exit()`` has the same unbounded-wait pattern as
+        ``subscribe()`` (``while self.ws.sock: time.sleep(...)`` --
+        _websocket_stream.py:316) -- if the underlying websocket-client
+        thread never clears ``ws.sock``, this call hangs forever too.
+        Routed through the same timeout wrapper as subscribe calls
+        (2026-08-01 hang fix) so a wedged exit() can't freeze the
+        reconnect cycle that calls disconnect() first.
+        """
         self._running = False
         if self._public_ws is not None:
             try:
-                self._public_ws.exit()
+                await _run_pybit_call(self._public_ws.exit)
             except Exception as e:
                 log.warning("Error closing public WS: {err}", err=str(e))
             self._public_ws = None
 
         if self._private_ws is not None:
             try:
-                self._private_ws.exit()
+                await _run_pybit_call(self._private_ws.exit)
             except Exception as e:
                 log.warning("Error closing private WS: {err}", err=str(e))
             self._private_ws = None
