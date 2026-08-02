@@ -117,8 +117,8 @@ async def test_trade_open_fires_all_g_and_i_emissions(loguru_sink) -> None:
     assert float(coord_kv["sl"]) == float(thesis_kv["sl"]) == 78000.0
     assert float(coord_kv["tp"]) == float(thesis_kv["tp"]) == 84000.0
 
-    # G10 checks list visible
-    assert sltp_kv.get("checks") == "invalid_price,sl_equals_tp,wrong_side"
+    # G10 checks list visible. 2026-08-02 (trade-data audit fix #1): rr_below_min added.
+    assert sltp_kv.get("checks") == "invalid_price,sl_equals_tp,wrong_side,rr_below_min"
 
     # I2 fielded exchange_mode on TradeState
     state = coord._trades["BTCUSDT"]

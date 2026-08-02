@@ -73,8 +73,9 @@ def test_validate_pair_ok_emits_success_event(loguru_sink) -> None:
     # min_gap_bps = 0.001 * 10000 = 10
     assert float(kv.get("min_gap_bps", "0")) == 10.0
     assert kv.get("decision") == "OK"
-    # G10 audit schema — `checks` documents the gates the directive cleared
-    assert kv.get("checks") == "invalid_price,sl_equals_tp,wrong_side"
+    # G10 audit schema — `checks` documents the gates the directive cleared.
+    # 2026-08-02 (trade-data audit fix #1): rr_below_min added.
+    assert kv.get("checks") == "invalid_price,sl_equals_tp,wrong_side,rr_below_min"
 
 
 def test_validate_pair_ok_sell_direction(loguru_sink) -> None:

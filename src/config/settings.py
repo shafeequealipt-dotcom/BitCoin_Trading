@@ -678,6 +678,22 @@ class BrainSettings:
     # Advisory only; never gates or resizes a trade. Default False.
     entry_magnitude_advisory_enabled: bool = False
 
+    # 2026-08-02 (trade-data audit fix #4) — CALL_B's discretionary early
+    # "close" actions on existing positions (close_reason="strategic_review",
+    # see layer_manager._execute_position_actions) had NO downstream quality
+    # gate: whatever the brain's narrative said, it executed. 404-trade audit
+    # found this close_reason at 34.6% win rate, -$30 total, the worst
+    # non-force-close exit class. Gated to require the position's CURRENT
+    # pnl% to already be outside a small near-flat band before a "close" (not
+    # "take_profit") action is allowed through -- a genuine win or a genuine
+    # loss is real information; a near-flat close is closing on narrative
+    # alone with no P&L evidence either way, so it is downgraded to a no-op
+    # (falls through to the data-driven SL/TP/time-fuse mechanisms instead).
+    # take_profit actions are unaffected (already presumptively profitable).
+    strategic_close_gate_enabled: bool = True
+    strategic_close_gate_mode: str = "observe"
+    strategic_close_min_abs_pnl_pct: float = 0.3
+
     # Claude CLI subprocess timing (moved out of manager.py hardcodes)
     claude_cli_timeout_seconds: int = 300
     claude_cli_max_retries: int = 2
@@ -1200,6 +1216,15 @@ class RiskSettings:
     # the headspace buffer (a wrong-side correction width) and from the unrelated
     # time-decay ``min_sl_pct``.
     min_sl_distance_pct: float = 1.5
+    # 2026-08-02 (trade-data audit fix #1) — minimum TP-distance / SL-distance
+    # ratio enforced by SLTPValidator.validate_pair before order placement.
+    # The CALL_A prompt already asks for TP >= 1.5x SL, but nothing downstream
+    # enforced it: audited 404-trade sample showed avg win $1.48 vs avg loss
+    # $2.38 (payoff 0.62, i.e. TP consistently tighter than SL at the ACTUAL
+    # executed order, not just the prompt-suggested one) -- a >=1.5 win rate
+    # would be needed just to break even before fees. Same enforcement point
+    # as min_sl_distance_pct (F37) and the sl_equals_tp collapse check.
+    min_rr_ratio: float = 1.5
     max_position_size_pct: float = 10.0
     max_open_positions: int = 5
     daily_loss_limit_pct: float = 5.0
@@ -1381,7 +1406,17 @@ class WatchdogSettings:
     brain_cooldown_seconds: int = 120
     partial_close_pct: float = 50.0
     max_brain_calls_per_hour: int = 10
-    timeout_threshold_pct: float = 95.0  # % of max_hold_minutes before timeout close
+    # 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60. 404-trade audit:
+    # the 15-30min hold bucket has a 25.7% win rate and -$81.44 total (the
+    # single worst bucket), vs 70.6%/62.3% for 0-5/5-15min and a genuinely
+    # profitable +$8.22 for 30-60min. A losing trade was lingering nearly its
+    # ENTIRE planned hold (95%) before being cut, landing squarely in the bad
+    # zone. The PnL-aware one-time-extension branch above this threshold check
+    # (position_watchdog.py) already spares flat/winning trades from an early
+    # cut, so tightening this percentage shortens ONLY the losing-trade tail
+    # -- the profitable 30-60min momentum cohort (which extends past its
+    # timeout while ahead or flat) is unaffected.
+    timeout_threshold_pct: float = 60.0  # % of max_hold_minutes before timeout close
     early_exit_enabled: bool = False  # 0% historical win rate (24/24 losses) — SL handles exits; flip true to re-enable
     # Phase 2 (P0-1): fast set-diff reconcile cadence — independent of the
     # 5-min thesis reconcile. 0.0 disables the fast loop (kill switch).
@@ -5038,8 +5073,15 @@ class LossCuttingSettings:
     # position at 0.17-0.5% and was rejected — it would have required shrinking
     # positions, undoing brain-authoritative sizing.)
     cap_dollar_ceiling: float = 75.0
-    cap_pct_of_notional_young: float = 2.5
-    cap_pct_of_notional_old: float = 1.0
+    # 2026-08-02 (trade-data audit fix #3a) — halved 2.5/1.0 -> 1.25/0.5.
+    # 404-trade audit: loss_cap_force fired 7 times, 14.3% win rate,
+    # avg -$8.45/firing (worst single loss -$18.70) -- the cap itself was
+    # cutting large enough to be a major loss-tail contributor rather than
+    # a tight backstop. Halving preserves the existing young->old glide
+    # shape (age_fraction interpolation, see cap_pct usage in
+    # profit_sniper.py) and the $75 dollar ceiling / fee-adjustment below.
+    cap_pct_of_notional_young: float = 1.25
+    cap_pct_of_notional_old: float = 0.5
     # Finding N (2026-06-08) — net-aware cap. The cap distance bounds the GROSS
     # price loss; the round-trip taker fee pushes the realized NET past the
     # ceiling (live: NEAR gross ws_net -74.69 ~= the $75 cap, but realized NET
@@ -5260,6 +5302,29 @@ class EntryVolumeGateSettings:
             tolerance re-entry (matches the prompt rule's intent
             exactly — this gate ENFORCES what the prompt only asks for).
             0 = no-op kill switch.
+        symbol_breaker_enabled: Master switch for the symbol
+            circuit-breaker gate (2026-08-02).
+        symbol_breaker_mode: "observe" or "enforce" — circuit-breaker gate.
+        symbol_breaker_lookback_hours: Window to sum losses on this
+            symbol (any direction). 48h implements a rolling "48h ban" —
+            once the offending losses age out of the window, the gate
+            reopens on its own.
+        symbol_breaker_max_cumulative_loss_usd: Block once cumulative
+            loss magnitude on this symbol within the lookback reaches
+            this many dollars. <= 0 disables this check only (the count
+            check below still applies independently).
+        symbol_breaker_max_loss_count: Block once the loss count on this
+            symbol within the lookback reaches this many. <= 0 disables
+            this check only. Both thresholds <= 0 is a full kill switch.
+        min_move_enabled: Master switch for the minimum-expected-move
+            fee gate (2026-08-02).
+        min_move_mode: "observe" or "enforce" — min-move gate.
+        min_move_fee_multiple: TP distance must be at least this many
+            multiples of ``settings.adaptive_exit.round_trip_fee_pct``
+            (the shared canonical fee constant, not a duplicate). <= 0
+            is a no-op kill switch. 0-5min-hold trades audited at 70.6%
+            win rate but NEGATIVE total pnl -- pure fee churn on TPs
+            sized too close to round-trip cost.
     """
     enabled: bool = True
     mode: str = "observe"
@@ -5271,6 +5336,14 @@ class EntryVolumeGateSettings:
     recent_loss_mode: str = "observe"
     recent_loss_lookback_hours: float = 1.0
     max_recent_losses: int = 1
+    symbol_breaker_enabled: bool = True
+    symbol_breaker_mode: str = "observe"
+    symbol_breaker_lookback_hours: float = 48.0
+    symbol_breaker_max_cumulative_loss_usd: float = 10.0
+    symbol_breaker_max_loss_count: int = 3
+    min_move_enabled: bool = True
+    min_move_mode: str = "observe"
+    min_move_fee_multiple: float = 3.0
 
     def __post_init__(self) -> None:
         if self.mode not in ("observe", "enforce"):
@@ -5307,6 +5380,31 @@ class EntryVolumeGateSettings:
             raise ValueError(
                 f"entry_volume_gate.max_recent_losses must be >= 0, "
                 f"got {self.max_recent_losses}"
+            )
+        if self.symbol_breaker_mode not in ("observe", "enforce"):
+            raise ValueError(
+                f"entry_volume_gate.symbol_breaker_mode must be 'observe' or "
+                f"'enforce', got {self.symbol_breaker_mode!r}"
+            )
+        if self.symbol_breaker_lookback_hours < 0:
+            raise ValueError(
+                f"entry_volume_gate.symbol_breaker_lookback_hours must be >= 0, "
+                f"got {self.symbol_breaker_lookback_hours}"
+            )
+        if self.symbol_breaker_max_loss_count < 0:
+            raise ValueError(
+                f"entry_volume_gate.symbol_breaker_max_loss_count must be >= 0, "
+                f"got {self.symbol_breaker_max_loss_count}"
+            )
+        if self.min_move_mode not in ("observe", "enforce"):
+            raise ValueError(
+                f"entry_volume_gate.min_move_mode must be 'observe' or "
+                f"'enforce', got {self.min_move_mode!r}"
+            )
+        if self.min_move_fee_multiple < 0:
+            raise ValueError(
+                f"entry_volume_gate.min_move_fee_multiple must be >= 0, "
+                f"got {self.min_move_fee_multiple}"
             )
 
 
@@ -5867,6 +5965,13 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         entry_magnitude_advisory_enabled=data.get(
             "entry_magnitude_advisory_enabled", False
         ),
+        strategic_close_gate_enabled=data.get("strategic_close_gate_enabled", True),
+        strategic_close_gate_mode=str(
+            data.get("strategic_close_gate_mode", "observe")
+        ),
+        strategic_close_min_abs_pnl_pct=float(
+            data.get("strategic_close_min_abs_pnl_pct", 0.3)
+        ),
         # P2-1 (2026-05-13): first-byte deadline. See BrainSettings docstring.
         claude_cli_first_byte_timeout_seconds=int(
             data.get("claude_cli_first_byte_timeout_seconds", 90)
@@ -6064,6 +6169,7 @@ def _build_risk(data: dict[str, Any]) -> RiskSettings:
         default_stop_loss_pct=data.get("default_stop_loss_pct", 2.0),
         default_take_profit_pct=data.get("default_take_profit_pct", 4.0),
         min_sl_distance_pct=data.get("min_sl_distance_pct", 1.5),
+        min_rr_ratio=data.get("min_rr_ratio", 1.5),
         max_position_size_pct=data.get("max_position_size_pct", 10.0),
         max_open_positions=data.get("max_open_positions", 5),
         daily_loss_limit_pct=data.get("daily_loss_limit_pct", 5.0),
@@ -6174,7 +6280,7 @@ def _build_watchdog(data: dict[str, Any]) -> WatchdogSettings:
         brain_cooldown_seconds=data.get("brain_cooldown_seconds", 120),
         partial_close_pct=data.get("partial_close_pct", 50.0),
         max_brain_calls_per_hour=data.get("max_brain_calls_per_hour", 10),
-        timeout_threshold_pct=float(data.get("timeout_threshold_pct", 95.0)),
+        timeout_threshold_pct=float(data.get("timeout_threshold_pct", 60.0)),
         early_exit_enabled=bool(data.get("early_exit_enabled", False)),
         fast_reconcile_seconds=float(data.get("fast_reconcile_seconds", 30.0)),
         strategic_action_min_hold_seconds=float(

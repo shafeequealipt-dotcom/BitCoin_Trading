@@ -1,5 +1,5 @@
 """Entry Quality Gates — volume-ratio (2026-07-15), ATR (2026-07-16),
-recent-loss (2026-07-17).
+recent-loss (2026-07-17), symbol circuit-breaker (2026-08-02).
 
 Pure-function gates. Each returns a structured verdict for one entry-time
 feature of a proposed trade. No I/O, no settings object, no service
@@ -62,6 +62,22 @@ every other check has passed — so no upstream bypass matters. It counts
 LOSSES on this exact (symbol, direction) pair within a lookback window
 and blocks if the count meets or exceeds a threshold, independent of
 the brain's own self-assessed "setup quality."
+
+## Symbol circuit-breaker gate (2026-08-02)
+
+The recent-loss gate above is scoped to one (symbol, direction) pair, so
+a symbol bleeding money on alternating directions (a loss shorting, then
+a loss longing the bounce, then a loss shorting again) sails through it
+every time — each individual (symbol, direction) count never reaches the
+threshold even though the SYMBOL itself is clearly a repeat offender. A
+404-trade audit found exactly this: GWEIUSDT lost -$26.25 over 16 trades
+and CLUSDT lost -$14.32 over 25, both mixed-direction, post-dating the
+recent-loss gate's deploy.
+
+This gate is symbol-only (direction-independent) and dual-threshold: it
+blocks on EITHER cumulative dollar loss OR loss count within the lookback
+window, whichever trips first. Same last-mile execution point and
+fail-safe conventions as its siblings.
 """
 
 from __future__ import annotations
@@ -251,4 +267,158 @@ def evaluate_recent_loss_gate(
         verdict=VERDICT_PASS, would_block=False,
         recent_loss_count=recent_loss_count, threshold=max_recent_losses,
         reason="recent_loss_count_ok",
+    )
+
+
+@dataclass(frozen=True)
+class SymbolCircuitBreakerResult:
+    """Structured verdict for one symbol-circuit-breaker evaluation.
+
+    Like ``RecentLossGateResult``, never "unavailable" — a DB query
+    failure or genuinely empty history both resolve to 0/0.0 (no
+    fail-open ambiguity needed).
+    """
+    verdict: str
+    would_block: bool
+    cumulative_loss_usd: float
+    loss_count: int
+    max_cumulative_loss_usd: float
+    max_loss_count: int
+    reason: str
+
+
+def evaluate_symbol_circuit_breaker_gate(
+    cumulative_loss_usd: float,
+    loss_count: int,
+    max_cumulative_loss_usd: float,
+    max_loss_count: int,
+) -> SymbolCircuitBreakerResult:
+    """Evaluate a symbol's recent loss history against the circuit breaker.
+
+    Args:
+        cumulative_loss_usd: Sum of ``pnl_usd`` for this symbol's LOSING
+            closes within the lookback window, as a non-positive number
+            (computed by the caller via a direct DB query, e.g.
+            ``SUM(pnl_usd) WHERE pnl_usd < 0`` — kept out of this pure
+            function so it stays trivially testable). 0.0 when there are
+            no losses in the window.
+        loss_count: Number of losing closes on this symbol (any
+            direction) within the same window.
+        max_cumulative_loss_usd: Block once the MAGNITUDE of cumulative
+            loss reaches this many dollars. <= 0 disables the
+            dollar-threshold check only (the count check below still
+            applies independently).
+        max_loss_count: Block once the loss count reaches this many.
+            <= 0 disables the count-threshold check only.
+        Both thresholds <= 0 disables the gate entirely (always passes) —
+        the config-level kill switch.
+
+    Returns:
+        SymbolCircuitBreakerResult with the verdict and would_block flag.
+        The caller decides whether would_block actually skips the trade,
+        based on the gate's configured mode ("observe" vs "enforce").
+    """
+    if max_cumulative_loss_usd <= 0 and max_loss_count <= 0:
+        return SymbolCircuitBreakerResult(
+            verdict=VERDICT_PASS, would_block=False,
+            cumulative_loss_usd=cumulative_loss_usd, loss_count=loss_count,
+            max_cumulative_loss_usd=max_cumulative_loss_usd,
+            max_loss_count=max_loss_count,
+            reason="gate_disabled_thresholds_zero",
+        )
+
+    _dollar_tripped = (
+        max_cumulative_loss_usd > 0
+        and abs(cumulative_loss_usd) >= max_cumulative_loss_usd
+    )
+    _count_tripped = max_loss_count > 0 and loss_count >= max_loss_count
+
+    if _dollar_tripped and _count_tripped:
+        reason = "cumulative_loss_and_count_threshold_reached"
+    elif _dollar_tripped:
+        reason = "cumulative_loss_threshold_reached"
+    elif _count_tripped:
+        reason = "loss_count_threshold_reached"
+    else:
+        reason = "symbol_loss_history_ok"
+
+    return SymbolCircuitBreakerResult(
+        verdict=VERDICT_BLOCK if (_dollar_tripped or _count_tripped) else VERDICT_PASS,
+        would_block=_dollar_tripped or _count_tripped,
+        cumulative_loss_usd=cumulative_loss_usd, loss_count=loss_count,
+        max_cumulative_loss_usd=max_cumulative_loss_usd,
+        max_loss_count=max_loss_count,
+        reason=reason,
+    )
+
+
+@dataclass(frozen=True)
+class MinMoveGateResult:
+    """Structured verdict for one minimum-expected-move-vs-fee evaluation.
+
+    Mirrors ``ATRGateResult``'s shape (fail-open on missing data) — see its
+    docstring for the meaning of each shared field.
+    """
+    verdict: str
+    would_block: bool
+    tp_distance_pct: float | None
+    required_pct: float
+    reason: str
+
+
+def evaluate_min_move_gate(
+    tp_distance_pct: float | None,
+    round_trip_fee_pct: float,
+    min_fee_multiple: float,
+) -> MinMoveGateResult:
+    """Evaluate whether a proposed trade's TP target clears round-trip fees
+    by a comfortable margin.
+
+    404-trade audit found the 0-5min hold bucket at a 70.6% win rate yet
+    NEGATIVE total PnL ($-28.71) -- pure fee churn: the win rate says the
+    direction calls are fine, but TPs sized too close to the round-trip fee
+    cost more in fees than they clear in price movement. This gate blocks
+    trades whose TP distance doesn't clear a multiple of the fee, catching
+    the failure mode before the fact rather than after 100+ paper cuts.
+
+    Args:
+        tp_distance_pct: abs(tp_price - entry_price) / entry_price * 100,
+            or None when the caller couldn't compute it (e.g. tp_price not
+            yet finalized at this point in the pipeline).
+        round_trip_fee_pct: The canonical round-trip taker fee percent
+            (``settings.adaptive_exit.round_trip_fee_pct``) — one number
+            shared with the loss-cap's net-aware budgeting, not a new
+            fee constant.
+        min_fee_multiple: TP distance must be at least this many multiples
+            of the round-trip fee. <= 0 disables the gate entirely (always
+            passes) — the config-level kill switch.
+
+    Returns:
+        MinMoveGateResult with the verdict and would_block flag. The
+        caller decides whether would_block actually skips the trade,
+        based on the gate's configured mode ("observe" vs "enforce").
+    """
+    _required_pct = round_trip_fee_pct * min_fee_multiple
+    if min_fee_multiple <= 0:
+        return MinMoveGateResult(
+            verdict=VERDICT_PASS, would_block=False,
+            tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
+            reason="gate_disabled_threshold_zero",
+        )
+    if tp_distance_pct is None:
+        return MinMoveGateResult(
+            verdict=VERDICT_UNKNOWN_PASS, would_block=False,
+            tp_distance_pct=None, required_pct=_required_pct,
+            reason="tp_distance_unavailable",
+        )
+    if tp_distance_pct < _required_pct:
+        return MinMoveGateResult(
+            verdict=VERDICT_BLOCK, would_block=True,
+            tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
+            reason="tp_distance_below_fee_multiple",
+        )
+    return MinMoveGateResult(
+        verdict=VERDICT_PASS, would_block=False,
+        tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
+        reason="tp_distance_ok",
     )

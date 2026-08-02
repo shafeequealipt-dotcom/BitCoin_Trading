@@ -318,6 +318,21 @@ glm_max_retries = 2
 # coin's volatility line in the strategist prompt. Advisory only; never gates or
 # resizes. Default false. See ENTRY_GAPS_AND_TIMEFRAME_INVESTIGATION_FINDINGS.md.
 entry_magnitude_advisory_enabled = true
+# 2026-08-02 (trade-data audit fix #4) — CALL_B's discretionary early "close"
+# actions on existing positions (close_reason="strategic_review") had no
+# downstream quality gate. 404-trade audit: 34.6% win rate, -$30 total, the
+# worst non-force-close exit class. Gates a "close" (not "take_profit") on a
+# near-flat position (within +/-min_abs_pct of breakeven, no P&L evidence
+# either way) back to a no-op, deferring to SL/TP/time-fuse instead.
+# OPERATOR DECISION (2026-08-02): shipping in "observe" mode, NOT "enforce"
+# like the entry gates above — this touches live position exits rather than
+# entries, and there is no counterfactual data yet showing what these closes
+# would have done if left alone (they were quality issues in aggregate, not
+# necessarily individually wrong). Watch STRATEGIC_CLOSE_GATE logs; flip to
+# "enforce" once observed would_block rate/outcomes look right.
+strategic_close_gate_enabled = true
+strategic_close_gate_mode = "observe"
+strategic_close_min_abs_pnl_pct = 0.3
 # Issue 4 (CALL_A exploit/fetch, 2026-06-05) — strategy-evidence freshness.
 # A coin's "Strategies: N fired" consensus read older than this many seconds is
 # labelled STALE on the zero-fired line so the brain weighs a stale two-sided
@@ -716,7 +731,12 @@ default_take_profit_pct = 6.0
 # at/through entry) out to this distance before execution. Matches the CALL_A
 # prompt rule "SL at least 1.5% from entry". Safety net on the ENTRY stop only;
 # the exit systems (trailing/ladder/chandelier) are untouched.
+# 2026-08-02 (trade-data audit fix #1) — minimum TP-distance/SL-distance
+# ratio enforced by SLTPValidator.validate_pair before order placement.
+# 404-trade audit: avg win $1.48 vs avg loss $2.38 (payoff 0.62) -- the
+# prompt's "TP >= 1.5x SL" rule was never enforced downstream.
 min_sl_distance_pct = 1.5
+min_rr_ratio = 1.5
 max_position_size_pct = 20.0
 max_open_positions = 10
 daily_loss_limit_pct = 10.0
@@ -890,6 +910,15 @@ brain_trigger_loss_pct = 0.8
 brain_cooldown_seconds = 60
 partial_close_pct = 50.0
 max_brain_calls_per_hour = 20
+# 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60. 404-trade audit:
+# the 15-30min hold bucket has a 25.7% win rate and -$81.44 total (worst
+# bucket), vs 70.6%/62.3% for 0-5/5-15min and +$8.22 for 30-60min. A losing
+# trade was lingering nearly its ENTIRE planned hold (95%) before being cut,
+# landing squarely in the bad zone. The PnL-aware one-time-extension branch
+# (position_watchdog.py, just above this threshold check) already spares
+# flat/winning trades from an early cut, so this only shortens the
+# losing-trade tail -- the profitable 30-60min momentum cohort is unaffected.
+timeout_threshold_pct = 60.0
 # Layer 3: early-exit disabled (0% historical win rate, 24/24 losses).
 # SL handles exits cleanly. Set true to re-enable; monitoring log
 # 'EARLY_EXIT_DISABLED_WOULD_FIRE' shows what it would have done.
@@ -2453,14 +2482,19 @@ volatility_entry_sizing_enabled = false
 # non-strangling stop that scales with position size and keeps the brain's
 # sizing intact), and the dollar ceiling only bounds the CATASTROPHIC worst case
 # on a very large position. The percent tightens inward with age; the ceiling is
-# fixed and never loosens. With ceiling $75 + percent 2.5%->1%: a $1000 position
-# caps at $25 (2.5%) young / $10 (1%) old; a $3000 position at $75 (2.5%) /
-# $30 (1%); only a >$3000 position is bounded by the $75 ceiling. (A literal $5
-# ceiling was rejected — on a $1000-3000 position it is a 0.17-0.5% stop that
+# fixed and never loosens. With ceiling $75 + percent 1.25%->0.5% (halved
+# 2026-08-02, see below): a $1000 position caps at $12.50 (1.25%) young / $5
+# (0.5%) old; a $3000 position at $37.50 (1.25%) / $15 (0.5%); a >$6000
+# position is bounded by the $75 ceiling instead. (A literal $5 dollar-ceiling
+# was rejected — on a $1000-3000 position it is a 0.17-0.5% stop that
 # strangles, and would have required shrinking positions, undoing brain sizing.)
 cap_dollar_ceiling = 75.0
-cap_pct_of_notional_young = 2.5
-cap_pct_of_notional_old = 1.0
+# 2026-08-02 (trade-data audit fix #3a) — halved 2.5/1.0 -> 1.25/0.5.
+# 404-trade audit: loss_cap_force fired 7 times, 14.3% win rate,
+# avg -$8.45/firing (worst single -$18.70). Halving preserves the young->
+# old glide shape and the $75 ceiling / fee-adjustment below unchanged.
+cap_pct_of_notional_young = 1.25
+cap_pct_of_notional_old = 0.5
 # Finding N (2026-06-08) — net-aware cap. The cap distance bounds the GROSS price
 # loss; the round-trip taker fee pushes the realized NET past the ceiling (NEAR
 # gross -74.69 ~= $75 cap, but net -81.24, ~8% over). Subtract this round-trip
@@ -3631,6 +3665,42 @@ recent_loss_enabled = true
 recent_loss_mode = "enforce"
 recent_loss_lookback_hours = 1.0
 max_recent_losses = 1
+
+# ── Symbol circuit-breaker gate (2026-08-02) — same section, independent ──
+# The recent-loss gate above is scoped to one (symbol, direction) pair, so a
+# symbol bleeding money on ALTERNATING directions sails through it every
+# time. 404-trade audit: GWEIUSDT lost -$26.25 over 16 mixed-direction
+# trades and CLUSDT lost -$14.32 over 25, both post-dating the recent-loss
+# gate's deploy. This gate is symbol-only and dual-threshold (dollar OR
+# count, whichever trips first); lookback_hours=48 implements a rolling
+# "48h ban" that reopens on its own as offending losses age out.
+#
+# OPERATOR DECISION (2026-08-02): enforcing on first deploy, same trade-off
+# as the other three gates in this section. Revert instantly via
+# symbol_breaker_mode = "observe". Setting both max_cumulative_loss_usd and
+# max_loss_count <= 0 is a full kill switch; either alone <= 0 disables
+# just that one check.
+symbol_breaker_enabled = true
+symbol_breaker_mode = "enforce"
+symbol_breaker_lookback_hours = 48.0
+symbol_breaker_max_cumulative_loss_usd = 10.0
+symbol_breaker_max_loss_count = 3
+
+# ── Minimum-expected-move fee gate (2026-08-02) — same section, indep. knob ──
+# 404-trade audit: the 0-5min hold bucket has a 70.6% win rate (the direction
+# calls are fine) but NEGATIVE total pnl ($-28.71) -- pure fee churn from TPs
+# sized too close to the round-trip taker fee. Blocks trades whose TP
+# distance doesn't clear min_move_fee_multiple x the CANONICAL round-trip
+# fee (settings.adaptive_exit.round_trip_fee_pct = 0.11%, shared with the
+# loss-cap's net-aware budgeting -- not a duplicate constant), so at 3.0x
+# that's a 0.33% minimum TP distance.
+#
+# OPERATOR DECISION (2026-08-02): enforcing on first deploy, same trade-off
+# as the volume/ATR/recent-loss/symbol-breaker gates above. Revert instantly
+# via min_move_mode = "observe". min_move_fee_multiple = 0 is a kill switch.
+min_move_enabled = true
+min_move_mode = "enforce"
+min_move_fee_multiple = 3.0
 
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
 # Watchdog probes the per-worker liveness tracker every interval and

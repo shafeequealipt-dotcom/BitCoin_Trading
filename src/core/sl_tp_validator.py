@@ -30,6 +30,7 @@ class SLTPValidator:
         headspace_pct: float = 1.5,
         max_distance_pct: float = 10.0,
         min_sl_distance_pct: float = 1.5,
+        min_rr_ratio: float = 1.5,
     ):
         self.headspace_pct = headspace_pct / 100.0
         self.max_distance_pct = max_distance_pct / 100.0
@@ -40,6 +41,11 @@ class SLTPValidator:
         # through). Entry-stop safety net only; the exit systems are untouched.
         # Wrong-side stops are already auto-fixed via the headspace branch below.
         self.min_sl_distance_pct = min_sl_distance_pct / 100.0
+        # 2026-08-02 (trade-data audit fix #1) — minimum TP-distance /
+        # SL-distance ratio enforced in validate_pair(). Same pattern as
+        # min_sl_distance_pct: the prompt asks for this but nothing
+        # downstream enforced it.
+        self.min_rr_ratio = min_rr_ratio
 
     def validate_sl(
         self, sl_price: float, current_price: float, direction: str, symbol: str = "",
@@ -334,6 +340,8 @@ class SLTPValidator:
             ("SKIP", "wrong_side")    -> sl/tp on the wrong side relative
                 to entry for the chosen direction (would close the trade
                 immediately at open).
+            ("SKIP", "rr_below_min")  -> TP-distance/SL-distance ratio is
+                below ``min_rr_ratio`` (2026-08-02, trade-data audit fix #1).
         """
         if sl_price <= 0 or tp_price <= 0:
             log.warning(
@@ -382,6 +390,25 @@ class SLTPValidator:
             )
             return "SKIP", "wrong_side"
 
+        # 2026-08-02 (trade-data audit fix #1) — reject directives whose
+        # ACTUAL TP/SL distance ratio falls below min_rr_ratio. The CALL_A
+        # prompt already asks for this; nothing downstream enforced it, so
+        # a 404-trade audit found avg win $1.48 vs avg loss $2.38 (payoff
+        # 0.62) at the real executed order, not just prompt drift. Checked
+        # here (after direction sanity) since sl/tp distances are only
+        # meaningful once both sides are confirmed correctly positioned.
+        _rr_sl_dist = abs(ref - sl_price)
+        _rr_tp_dist = abs(tp_price - ref)
+        _rr_ratio = _rr_tp_dist / _rr_sl_dist if _rr_sl_dist > 0 else 0.0
+        if _rr_ratio < self.min_rr_ratio:
+            log.warning(
+                f"SLTP_PAIR_SKIP | sym={symbol} rsn=rr_below_min "
+                f"rr={_rr_ratio:.2f} min_rr={self.min_rr_ratio:.2f} "
+                f"sl={format_price(sl_price, ref)} entry={format_price(ref)} "
+                f"tp={format_price(tp_price, ref)} | {ctx()}"
+            )
+            return "SKIP", "rr_below_min"
+
         # Observability G10 — success-path emission. The audit
         # (2026-05-13) noted SLTP_VALIDATE fires zero times. Investigation
         # confirmed only the SKIP paths emitted via SLTP_PAIR_SKIP; the
@@ -402,9 +429,10 @@ class SLTPValidator:
             f"SLTP_PAIR_OK | sym={symbol} side={'Buy' if is_buy else 'Sell'} "
             f"sl_pct={_sl_pct:.3f} tp_pct={_tp_pct:.3f} "
             f"delta_bps={gap_frac * 10000:.2f} "
+            f"rr={_rr_ratio:.2f} min_rr={self.min_rr_ratio:.2f} "
             f"max_dist_pct={self.max_distance_pct * 100:.0f} "
             f"min_gap_bps={SL_TP_MIN_GAP_FRACTION_OF_ENTRY * 10000:.2f} "
             f"decision=OK "
-            f"checks=invalid_price,sl_equals_tp,wrong_side | {ctx()}"
+            f"checks=invalid_price,sl_equals_tp,wrong_side,rr_below_min | {ctx()}"
         )
         return "OK", ""

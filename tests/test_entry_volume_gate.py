@@ -19,7 +19,9 @@ from src.core.entry_volume_gate import (
     VERDICT_UNKNOWN_PASS,
     evaluate_entry_atr_gate,
     evaluate_entry_volume_gate,
+    evaluate_min_move_gate,
     evaluate_recent_loss_gate,
+    evaluate_symbol_circuit_breaker_gate,
 )
 
 
@@ -182,3 +184,171 @@ def test_recent_loss_settings_rejects_negative_lookback() -> None:
 def test_recent_loss_settings_rejects_negative_max_losses() -> None:
     with pytest.raises(ValueError):
         EntryVolumeGateSettings(max_recent_losses=-1)
+
+
+# ── Symbol circuit-breaker gate (2026-08-02) ──────────────────────────
+
+
+def test_symbol_breaker_dollar_threshold_blocks() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-10.0, loss_count=1,
+        max_cumulative_loss_usd=10.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+    assert result.reason == "cumulative_loss_threshold_reached"
+
+
+def test_symbol_breaker_count_threshold_blocks() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-2.0, loss_count=3,
+        max_cumulative_loss_usd=10.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+    assert result.reason == "loss_count_threshold_reached"
+
+
+def test_symbol_breaker_both_thresholds_blocks_with_combined_reason() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-15.0, loss_count=5,
+        max_cumulative_loss_usd=10.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_BLOCK
+    assert result.reason == "cumulative_loss_and_count_threshold_reached"
+
+
+def test_symbol_breaker_below_both_thresholds_passes() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-5.0, loss_count=2,
+        max_cumulative_loss_usd=10.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+    assert result.reason == "symbol_loss_history_ok"
+
+
+def test_symbol_breaker_no_losses_passes() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=0.0, loss_count=0,
+        max_cumulative_loss_usd=10.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_symbol_breaker_dollar_check_alone_disabled() -> None:
+    """max_cumulative_loss_usd <= 0 disables ONLY the dollar check —
+    the count check still applies independently."""
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-1000.0, loss_count=1,
+        max_cumulative_loss_usd=0.0, max_loss_count=3,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+    result_count_trips = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-1000.0, loss_count=3,
+        max_cumulative_loss_usd=0.0, max_loss_count=3,
+    )
+    assert result_count_trips.verdict == VERDICT_BLOCK
+    assert result_count_trips.reason == "loss_count_threshold_reached"
+
+
+def test_symbol_breaker_count_check_alone_disabled() -> None:
+    """max_loss_count <= 0 disables ONLY the count check — the dollar
+    check still applies independently."""
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-2.0, loss_count=1000,
+        max_cumulative_loss_usd=10.0, max_loss_count=0,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_symbol_breaker_both_thresholds_zero_is_full_kill_switch() -> None:
+    result = evaluate_symbol_circuit_breaker_gate(
+        cumulative_loss_usd=-1000.0, loss_count=1000,
+        max_cumulative_loss_usd=0.0, max_loss_count=0,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+    assert result.reason == "gate_disabled_thresholds_zero"
+
+
+def test_symbol_breaker_settings_defaults() -> None:
+    settings = EntryVolumeGateSettings()
+    assert settings.symbol_breaker_enabled is True
+    assert settings.symbol_breaker_mode == "observe"
+    assert settings.symbol_breaker_lookback_hours == 48.0
+    assert settings.symbol_breaker_max_cumulative_loss_usd == 10.0
+    assert settings.symbol_breaker_max_loss_count == 3
+
+
+def test_symbol_breaker_settings_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(symbol_breaker_mode="block_everything")
+
+
+def test_symbol_breaker_settings_rejects_negative_lookback() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(symbol_breaker_lookback_hours=-1.0)
+
+
+def test_symbol_breaker_settings_rejects_negative_max_loss_count() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(symbol_breaker_max_loss_count=-1)
+
+
+# ── Minimum-expected-move fee gate (2026-08-02) ───────────────────────
+
+
+def test_min_move_below_required_blocks() -> None:
+    # fee=0.11%, multiple=3.0 -> required 0.33%; tp_dist=0.2% is below it
+    result = evaluate_min_move_gate(
+        tp_distance_pct=0.2, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+    )
+    assert result.verdict == VERDICT_BLOCK
+    assert result.would_block is True
+    assert abs(result.required_pct - 0.33) < 1e-9
+
+
+def test_min_move_at_or_above_required_passes() -> None:
+    result = evaluate_min_move_gate(
+        tp_distance_pct=0.4, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_min_move_none_distance_fails_open() -> None:
+    result = evaluate_min_move_gate(
+        tp_distance_pct=None, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+    )
+    assert result.verdict == VERDICT_UNKNOWN_PASS
+    assert result.would_block is False
+
+
+def test_min_move_zero_multiple_is_kill_switch() -> None:
+    result = evaluate_min_move_gate(
+        tp_distance_pct=0.01, round_trip_fee_pct=0.11, min_fee_multiple=0,
+    )
+    assert result.verdict == VERDICT_PASS
+    assert result.would_block is False
+
+
+def test_min_move_settings_defaults() -> None:
+    settings = EntryVolumeGateSettings()
+    assert settings.min_move_enabled is True
+    assert settings.min_move_mode == "observe"
+    assert settings.min_move_fee_multiple == 3.0
+
+
+def test_min_move_settings_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(min_move_mode="block_everything")
+
+
+def test_min_move_settings_rejects_negative_multiple() -> None:
+    with pytest.raises(ValueError):
+        EntryVolumeGateSettings(min_move_fee_multiple=-1.0)

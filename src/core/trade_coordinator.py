@@ -120,6 +120,22 @@ class TradeState:
     #   live one had.
     exchange_mode: str = ""
 
+    # 2026-08-02 (trade-data audit) — leverage/size_usd were accepted by
+    # register_trade() as G6 "observability-only" kwargs but never stored
+    # on TradeState, so trade_log.leverage/size_usd were 1/0 on literally
+    # every one of 404 audited trades (real orders used correct leverage;
+    # only this logging path was broken). Stored here now so on_trade_closed
+    # can forward the real values into the close record.
+    leverage: int = 0
+    size_usd: float = 0.0
+
+    # 2026-08-02 (trade-data audit fix #1) — SL/TP prices at entry, needed
+    # by the TP/SL-distance-ratio validator to compute the intended R:R at
+    # order-placement time (separate from apex_original_sl/tp, which only
+    # populate when APEX resizing ran).
+    sl_price: float = 0.0
+    tp_price: float = 0.0
+
 
 class TradeCoordinator:
     """Shared coordination hub for all trading components."""
@@ -672,13 +688,14 @@ class TradeCoordinator:
         ``symbol`` — prevents a previous trade's thesis from matching a
         fresh same-symbol re-open.
 
-        ``sl_price`` / ``tp_price`` / ``leverage`` / ``size_usd`` are
-        observability-only kwargs (G6 audit, 2026-05-14). They feed
-        the COORD_REG emission's audit-required field set but are NOT
-        persisted on TradeState (which has its own size + entry_price
-        fields). Callers that don't pass them get COORD_REG with
-        defaults (0 / 0.0); the values still live elsewhere (trade plan,
-        _trade_info dict) for downstream consumers.
+        ``sl_price`` / ``tp_price`` / ``leverage`` / ``size_usd`` feed the
+        COORD_REG emission's audit-required field set (G6 audit,
+        2026-05-14) and are now also persisted on TradeState (2026-08-02
+        trade-data audit fix — previously discarded here, leaving
+        trade_log.leverage/size_usd at their defaults 1/0 on every closed
+        trade regardless of the real order). Callers that don't pass them
+        get COORD_REG with defaults (0 / 0.0) and TradeState keeps its own
+        defaults too.
         """
         immunity = self.MINIMUM_HOLD_SECONDS.get(strategy_category, 60)
 
@@ -752,6 +769,13 @@ class TradeCoordinator:
             entry_regime_at_open=entry_regime_at_open,
             entry_regime_confidence=entry_regime_confidence,
             exchange_mode=_trade_exchange_mode,
+            # 2026-08-02 (trade-data audit) — previously accepted here only
+            # for the COORD_REG log line and discarded, leaving trade_log's
+            # leverage/size_usd columns permanently 1/0. See TradeState docstring.
+            leverage=leverage,
+            size_usd=size_usd,
+            sl_price=sl_price,
+            tp_price=tp_price,
         )
 
         # Observability G6 (field completeness) — Phase 0 baseline
@@ -1706,6 +1730,13 @@ class TradeCoordinator:
             "strategy_name": state.strategy_name if state else "",
             "strategy_category": state.strategy_category if state else "",
             "source": state.source if state else "",
+            # 2026-08-02 (trade-data audit) — real leverage/size_usd
+            # forwarded from TradeState so trade_log stops recording
+            # every trade as leverage=1/size_usd=0. See TradeState docstring.
+            "leverage": state.leverage if state and state.leverage else 1,
+            "size_usd": state.size_usd if state else 0.0,
+            "sl_price": state.sl_price if state else 0.0,
+            "tp_price": state.tp_price if state else 0.0,
             # T2-3 (2026-05-12): authoritative exchange mode for this
             # trade — populates the trade_intelligence.exchange_mode
             # column (was silently defaulting to 'shadow' for every row).
@@ -1982,6 +2013,12 @@ class TradeCoordinator:
             "strategy_name": state.strategy_name,
             "strategy_category": state.strategy_category,
             "source": state.source,
+            # 2026-08-02 (trade-data audit) — see on_trade_closed's record
+            # dict for context. Partial-close rows get the same real values.
+            "leverage": state.leverage or 1,
+            "size_usd": state.size_usd,
+            "sl_price": state.sl_price,
+            "tp_price": state.tp_price,
             "exchange_mode": _t2_3_exchange_mode,
             "opened_at": state.opened_at_dt.isoformat(),
             "closed_at": datetime.now(timezone.utc).isoformat(),

@@ -16,7 +16,9 @@ from src.config.settings import EntryVolumeGateSettings, FlipTPSettings, Setting
 from src.core.entry_volume_gate import (
     evaluate_entry_atr_gate,
     evaluate_entry_volume_gate,
+    evaluate_min_move_gate,
     evaluate_recent_loss_gate,
+    evaluate_symbol_circuit_breaker_gate,
 )
 from src.core.flip_tp_capper import (
     METHOD_DISABLED,
@@ -3205,6 +3207,40 @@ class StrategyWorker(SweetSpotWorker):
         _evg_settings = getattr(self.settings, "entry_volume_gate", None) or (
             EntryVolumeGateSettings()
         )
+
+        # ── Minimum-Expected-Move Fee Gate (2026-08-02) — same TP/SL values ──
+        # validate_pair already finalized above; no TA fetch needed. 404-trade
+        # audit: 0-5min holds ran 70.6% win rate but NEGATIVE total pnl ($-28.71)
+        # -- pure fee churn on TPs sized too close to the round-trip taker fee.
+        if _evg_settings.min_move_enabled and current_price > 0:
+            _evg_mm_tp_dist_pct = abs(tp - current_price) / current_price * 100.0
+            _evg_mm_adaptive_exit = getattr(self.settings, "adaptive_exit", None)
+            _evg_mm_fee_pct = float(
+                getattr(_evg_mm_adaptive_exit, "round_trip_fee_pct", 0.11)
+            )
+            _evg_mm_result = evaluate_min_move_gate(
+                tp_distance_pct=_evg_mm_tp_dist_pct,
+                round_trip_fee_pct=_evg_mm_fee_pct,
+                min_fee_multiple=_evg_settings.min_move_fee_multiple,
+            )
+            log.info(
+                f"ENTRY_MIN_MOVE_GATE | sym={symbol} "
+                f"tp_dist_pct={_evg_mm_result.tp_distance_pct:.4f} "
+                f"required_pct={_evg_mm_result.required_pct:.4f} "
+                f"fee_pct={_evg_mm_fee_pct:.3f} "
+                f"multiple={_evg_settings.min_move_fee_multiple:.1f} "
+                f"mode={_evg_settings.min_move_mode} "
+                f"verdict={_evg_mm_result.verdict} would_block={_evg_mm_result.would_block} "
+                f"reason={_evg_mm_result.reason} | {ctx()}"
+            )
+            if _evg_settings.min_move_mode == "enforce" and _evg_mm_result.would_block:
+                log.warning(
+                    f"TRADE_SKIP | sym={symbol} rsn=entry_min_move_gate_blocked "
+                    f"detail='tp_dist_pct={_evg_mm_result.tp_distance_pct:.4f} "
+                    f"required_pct={_evg_mm_result.required_pct:.4f}' | {ctx()}"
+                )
+                return (False, "entry_min_move_gate_blocked")
+
         if _evg_settings.enabled or _evg_settings.atr_enabled:
             _evg_volume_ratio: float | None = None
             _evg_atr_pct: float | None = None
@@ -3337,6 +3373,60 @@ class StrategyWorker(SweetSpotWorker):
                     f"{_evg_settings.recent_loss_lookback_hours:.2f}' | {ctx()}"
                 )
                 return (False, "entry_recent_loss_gate_blocked")
+
+        # ── Symbol Circuit-Breaker Gate (2026-08-02) — direction-independent, ──
+        # runs after the (symbol, direction)-scoped recent-loss gate above. A
+        # symbol bleeding money on ALTERNATING directions sails through that
+        # gate every time; this one sums ALL losses on the symbol regardless
+        # of side. See IMPLEMENT_ENTRY_QUALITY_SELECTIVITY.md-style forensic
+        # trace: GWEIUSDT -$26.25/16 trades, CLUSDT -$14.32/25, both
+        # mixed-direction, in the 404-trade trade-data audit.
+        if _evg_settings.symbol_breaker_enabled:
+            _evg_cb_loss_usd = 0.0
+            _evg_cb_loss_count = 0
+            try:
+                _evg_cb_hours = _evg_settings.symbol_breaker_lookback_hours
+                _evg_cb_row = await self.db.fetch_one(
+                    "SELECT COALESCE(SUM(pnl_usd), 0) AS loss_usd, "
+                    "COUNT(*) AS cnt FROM trade_log "
+                    "WHERE symbol = ? AND pnl_usd < 0 "
+                    "AND julianday(closed_at) >= julianday('now', ?)",
+                    (symbol, f"-{_evg_cb_hours} hours"),
+                )
+                _evg_cb_loss_usd = float((_evg_cb_row or {}).get("loss_usd", 0.0) or 0.0)
+                _evg_cb_loss_count = int((_evg_cb_row or {}).get("cnt", 0) or 0)
+            except Exception as _evg_cb_exc:
+                log.warning(
+                    f"ENTRY_SYMBOL_BREAKER_QUERY_FAIL | sym={symbol} "
+                    f"err_type={type(_evg_cb_exc).__name__} "
+                    f"err='{str(_evg_cb_exc)[:200]}' | {ctx()}"
+                )
+
+            _evg_cb_result = evaluate_symbol_circuit_breaker_gate(
+                cumulative_loss_usd=_evg_cb_loss_usd,
+                loss_count=_evg_cb_loss_count,
+                max_cumulative_loss_usd=_evg_settings.symbol_breaker_max_cumulative_loss_usd,
+                max_loss_count=_evg_settings.symbol_breaker_max_loss_count,
+            )
+            log.info(
+                f"ENTRY_SYMBOL_BREAKER_GATE | sym={symbol} "
+                f"loss_usd={_evg_cb_result.cumulative_loss_usd:.2f} "
+                f"loss_count={_evg_cb_result.loss_count} "
+                f"lookback_h={_evg_settings.symbol_breaker_lookback_hours:.1f} "
+                f"thr_usd={_evg_cb_result.max_cumulative_loss_usd:.2f} "
+                f"thr_count={_evg_cb_result.max_loss_count} "
+                f"mode={_evg_settings.symbol_breaker_mode} "
+                f"verdict={_evg_cb_result.verdict} would_block={_evg_cb_result.would_block} "
+                f"reason={_evg_cb_result.reason} | {ctx()}"
+            )
+            if _evg_settings.symbol_breaker_mode == "enforce" and _evg_cb_result.would_block:
+                log.warning(
+                    f"TRADE_SKIP | sym={symbol} rsn=entry_symbol_breaker_blocked "
+                    f"detail='loss_usd={_evg_cb_result.cumulative_loss_usd:.2f} "
+                    f"loss_count={_evg_cb_result.loss_count} "
+                    f"lookback_h={_evg_settings.symbol_breaker_lookback_hours:.1f}' | {ctx()}"
+                )
+                return (False, "entry_symbol_breaker_blocked")
 
         # ── Fix 7 (volatility-scaled stop + size haircut, 2026-06-10) ──
         # The constant ~1.5% min stop sat INSIDE volatile coins' noise band (91%

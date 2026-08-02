@@ -1305,6 +1305,20 @@ class LayerManager:
             else frozenset()
         )
 
+        # 2026-08-02 (trade-data audit fix #4) — snapshot live positions once
+        # per dispatch (not per-action) so the strategic-close gate below can
+        # check each "close" action's CURRENT pnl% without an extra call per
+        # symbol. See BrainSettings.strategic_close_gate_enabled docstring.
+        _scg_settings = getattr(self.settings, "brain", None)
+        _scg_enabled = bool(getattr(_scg_settings, "strategic_close_gate_enabled", False))
+        _scg_positions_by_symbol: dict = {}
+        if _scg_enabled:
+            try:
+                _scg_positions = await position_service.get_positions()
+                _scg_positions_by_symbol = {p.symbol: p for p in _scg_positions}
+            except Exception as e:
+                log.warning(f"STRATEGIC_CLOSE_GATE_SNAPSHOT_FAIL | err='{str(e)[:150]}' | {ctx()}")
+
         for symbol, action in plan.position_actions.items():
             if action.action == "hold":
                 continue
@@ -1338,6 +1352,45 @@ class LayerManager:
                 )
                 if not allowed:
                     continue
+
+            # 2026-08-02 (trade-data audit fix #4) — strategic-close quality
+            # gate. A discretionary "close" (not "take_profit", which is
+            # presumptively already profitable) on a position sitting within
+            # +/-strategic_close_min_abs_pnl_pct of breakeven has no P&L
+            # evidence backing it either way — closing on the brain's
+            # narrative alone. 404-trade audit: this close_reason
+            # ("strategic_review") ran 34.6% win rate, -$30 total, the worst
+            # non-force-close exit class. Gated (not yet enforce by default
+            # — see BrainSettings docstring) rather than removed, so the
+            # brain can still act on genuine wins/losses; only the near-flat
+            # "vibes" case falls through to hold instead, deferring to the
+            # data-driven SL/TP/time-fuse mechanisms.
+            if _scg_enabled and action.action == "close":
+                _scg_pos = _scg_positions_by_symbol.get(symbol)
+                if _scg_pos is not None and _scg_pos.entry_price > 0:
+                    _scg_pnl_pct = (
+                        (_scg_pos.mark_price - _scg_pos.entry_price) / _scg_pos.entry_price
+                    ) * 100.0
+                    if str(_scg_pos.side).lower() in ("sell", "short"):
+                        _scg_pnl_pct = -_scg_pnl_pct
+                    _scg_min_pct = float(
+                        getattr(_scg_settings, "strategic_close_min_abs_pnl_pct", 0.3)
+                    )
+                    _scg_would_block = abs(_scg_pnl_pct) < _scg_min_pct
+                    _scg_mode = str(getattr(_scg_settings, "strategic_close_gate_mode", "observe"))
+                    log.info(
+                        f"STRATEGIC_CLOSE_GATE | sym={symbol} pnl_pct={_scg_pnl_pct:+.3f} "
+                        f"min_abs_pct={_scg_min_pct:.2f} mode={_scg_mode} "
+                        f"would_block={_scg_would_block} | {ctx()}"
+                    )
+                    if _scg_mode == "enforce" and _scg_would_block:
+                        log.warning(
+                            f"STRATEGIC_CLOSE_GATE_BLOCKED | sym={symbol} "
+                            f"pnl_pct={_scg_pnl_pct:+.3f} min_abs_pct={_scg_min_pct:.2f} "
+                            f"rsn='{str(action.reason)[:80]}' | near-flat close with no "
+                            f"P&L evidence — deferring to SL/TP/time-fuse | {ctx()}"
+                        )
+                        continue
 
             # For close actions, record the reason for proper attribution.
             # T6-8 / Phase5 F-21 fix (six-tier-fixes 2026-05-11) — pre-fix

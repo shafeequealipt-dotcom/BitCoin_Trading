@@ -892,15 +892,18 @@ class WorkerManager:
         from src.core.sl_tp_validator import SLTPValidator
         _risk_cfg = getattr(self.settings, "risk", None)
         _min_sl_dist = float(getattr(_risk_cfg, "min_sl_distance_pct", 1.5))
+        _min_rr_ratio = float(getattr(_risk_cfg, "min_rr_ratio", 1.5))
         sl_validator = SLTPValidator(
             headspace_pct=2.5,
             max_distance_pct=25.0,
             min_sl_distance_pct=_min_sl_dist,
+            min_rr_ratio=_min_rr_ratio,
         )
         self._services["sl_validator"] = sl_validator
         # F37 boot sentinel — confirm the minimum-SL-distance clamp loaded.
         log.info(
             f"SLTP_MIN_DISTANCE_CONFIG | min_sl_distance_pct={_min_sl_dist:.2f} "
+            f"min_rr_ratio={_min_rr_ratio:.2f} "
             f"headspace_pct=2.5 max_distance_pct=25.0 | {ctx()}"
         )
         # Fix 7 boot sentinel — confirm the volatility-stop-scaling config loaded.
@@ -2583,6 +2586,15 @@ class WorkerManager:
                             strategy=record.get("strategy_name", ""),
                             close_reason=record["closed_by"],
                             hold_minutes=record["hold_seconds"] / 60,
+                            # 2026-08-02 (trade-data audit) — record now
+                            # carries real leverage/size_usd forwarded from
+                            # TradeState (trade_coordinator.py). Previously
+                            # unforwarded here, so every trade_log row
+                            # silently fell back to write_trade's own
+                            # defaults (leverage=1, size_usd=0) regardless
+                            # of the real order.
+                            leverage=record.get("leverage", 1),
+                            size_usd=record.get("size_usd", 0.0),
                             # CRITICAL-2 fix — forward opened_at populated
                             # by trade_coordinator.on_trade_closed from
                             # state.opened_at_dt. Without this, trade_log
