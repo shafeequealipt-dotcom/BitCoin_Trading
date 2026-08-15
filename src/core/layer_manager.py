@@ -1353,18 +1353,23 @@ class LayerManager:
                 if not allowed:
                     continue
 
-            # 2026-08-02 (trade-data audit fix #4) — strategic-close quality
-            # gate. A discretionary "close" (not "take_profit", which is
-            # presumptively already profitable) on a position sitting within
-            # +/-strategic_close_min_abs_pnl_pct of breakeven has no P&L
-            # evidence backing it either way — closing on the brain's
-            # narrative alone. 404-trade audit: this close_reason
-            # ("strategic_review") ran 34.6% win rate, -$30 total, the worst
-            # non-force-close exit class. Gated (not yet enforce by default
-            # — see BrainSettings docstring) rather than removed, so the
-            # brain can still act on genuine wins/losses; only the near-flat
-            # "vibes" case falls through to hold instead, deferring to the
-            # data-driven SL/TP/time-fuse mechanisms.
+            # Strategic-close quality gate (2026-08-02; CRITERION CORRECTED
+            # 2026-08-15, Phase 4). A discretionary "close" (not
+            # "take_profit", which is presumptively already profitable) on an
+            # UNDERWATER position is deferred to the purpose-built loss
+            # mechanisms (loss cap / stop-loss) instead of executing on the
+            # brain's narrative.
+            #
+            # The original criterion blocked NEAR-FLAT closes; observe-mode
+            # data disproved that exactly backwards -- the near-flat closes
+            # were the profitable subset (+$8.71) while the money was lost on
+            # decisive ones. Split by sign: closes taken in profit made
+            # +$38.82 (15 trades), closes taken at a loss made -$64.77 (15).
+            # So the live question is whether the brain should be closing
+            # losers at all. Still "observe" by default -- the counterfactual
+            # is unresolved (those losing closes averaged -0.72% while the cap
+            # sits at 1.25% of notional, so deferring could book BIGGER
+            # losses). See BrainSettings.strategic_close_gate_enabled.
             if _scg_enabled and action.action == "close":
                 _scg_pos = _scg_positions_by_symbol.get(symbol)
                 if _scg_pos is not None and _scg_pos.entry_price > 0:
@@ -1374,21 +1379,21 @@ class LayerManager:
                     if str(_scg_pos.side).lower() in ("sell", "short"):
                         _scg_pnl_pct = -_scg_pnl_pct
                     _scg_min_pct = float(
-                        getattr(_scg_settings, "strategic_close_min_abs_pnl_pct", 0.3)
+                        getattr(_scg_settings, "strategic_close_min_pnl_pct", 0.0)
                     )
-                    _scg_would_block = abs(_scg_pnl_pct) < _scg_min_pct
+                    _scg_would_block = _scg_pnl_pct < _scg_min_pct
                     _scg_mode = str(getattr(_scg_settings, "strategic_close_gate_mode", "observe"))
                     log.info(
                         f"STRATEGIC_CLOSE_GATE | sym={symbol} pnl_pct={_scg_pnl_pct:+.3f} "
-                        f"min_abs_pct={_scg_min_pct:.2f} mode={_scg_mode} "
+                        f"min_pnl_pct={_scg_min_pct:+.2f} mode={_scg_mode} "
                         f"would_block={_scg_would_block} | {ctx()}"
                     )
                     if _scg_mode == "enforce" and _scg_would_block:
                         log.warning(
                             f"STRATEGIC_CLOSE_GATE_BLOCKED | sym={symbol} "
-                            f"pnl_pct={_scg_pnl_pct:+.3f} min_abs_pct={_scg_min_pct:.2f} "
-                            f"rsn='{str(action.reason)[:80]}' | near-flat close with no "
-                            f"P&L evidence — deferring to SL/TP/time-fuse | {ctx()}"
+                            f"pnl_pct={_scg_pnl_pct:+.3f} min_pnl_pct={_scg_min_pct:+.2f} "
+                            f"rsn='{str(action.reason)[:80]}' | underwater discretionary "
+                            f"close — deferring to loss cap / stop-loss | {ctx()}"
                         )
                         continue
 

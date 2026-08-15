@@ -3211,38 +3211,11 @@ class StrategyWorker(SweetSpotWorker):
             EntryVolumeGateSettings()
         )
 
-        # ── Minimum-Expected-Move Fee Gate (2026-08-02) — same TP/SL values ──
-        # validate_pair already finalized above; no TA fetch needed. 404-trade
-        # audit: 0-5min holds ran 70.6% win rate but NEGATIVE total pnl ($-28.71)
-        # -- pure fee churn on TPs sized too close to the round-trip taker fee.
-        if _evg_settings.min_move_enabled and current_price > 0:
-            _evg_mm_tp_dist_pct = abs(tp - current_price) / current_price * 100.0
-            _evg_mm_adaptive_exit = getattr(self.settings, "adaptive_exit", None)
-            _evg_mm_fee_pct = float(
-                getattr(_evg_mm_adaptive_exit, "round_trip_fee_pct", 0.11)
-            )
-            _evg_mm_result = evaluate_min_move_gate(
-                tp_distance_pct=_evg_mm_tp_dist_pct,
-                round_trip_fee_pct=_evg_mm_fee_pct,
-                min_fee_multiple=_evg_settings.min_move_fee_multiple,
-            )
-            log.info(
-                f"ENTRY_MIN_MOVE_GATE | sym={symbol} "
-                f"tp_dist_pct={_evg_mm_result.tp_distance_pct:.4f} "
-                f"required_pct={_evg_mm_result.required_pct:.4f} "
-                f"fee_pct={_evg_mm_fee_pct:.3f} "
-                f"multiple={_evg_settings.min_move_fee_multiple:.1f} "
-                f"mode={_evg_settings.min_move_mode} "
-                f"verdict={_evg_mm_result.verdict} would_block={_evg_mm_result.would_block} "
-                f"reason={_evg_mm_result.reason} | {ctx()}"
-            )
-            if _evg_settings.min_move_mode == "enforce" and _evg_mm_result.would_block:
-                log.warning(
-                    f"TRADE_SKIP | sym={symbol} rsn=entry_min_move_gate_blocked "
-                    f"detail='tp_dist_pct={_evg_mm_result.tp_distance_pct:.4f} "
-                    f"required_pct={_evg_mm_result.required_pct:.4f}' | {ctx()}"
-                )
-                return (False, "entry_min_move_gate_blocked")
+        # NOTE (2026-08-15, Phase 2): the min-move fee gate used to sit HERE,
+        # comparing the brain's planned TP against the fee — which made it a
+        # no-op (planned TPs average ~6.5% vs a 0.33% threshold: 0 of 1039
+        # blocked). It now lives AFTER the TA fetch below, because the honest
+        # input is the adaptive-exit ARM level, which needs the coin's ATR.
 
         if _evg_settings.enabled or _evg_settings.atr_enabled:
             _evg_volume_ratio: float | None = None
@@ -3316,6 +3289,58 @@ class StrategyWorker(SweetSpotWorker):
                         f"| {ctx()}"
                     )
                     return (False, "entry_atr_gate_blocked")
+
+            # ── Minimum-Expected-Move Fee Gate (rewritten 2026-08-15, Phase 2) ──
+            # Placed here (not before the TA fetch) because the honest input is
+            # the adaptive-exit ARM level, which needs the coin's ATR as R.
+            # The arm is the smallest move that must happen for a "win" to be
+            # bankable at all; if that cannot clear the MEASURED round-trip cost
+            # (0.2398%, not the theoretical 0.11%) by a healthy multiple, the
+            # trade is structurally unprofitable regardless of direction. The
+            # previous version compared the brain's aspirational planned TP
+            # (~6.5%) and therefore blocked 0 of 1039 trades.
+            if _evg_settings.min_move_enabled:
+                _evg_mm_ae = getattr(self.settings, "adaptive_exit", None)
+                _evg_mm_fee_pct = float(
+                    getattr(_evg_mm_ae, "round_trip_fee_pct", 0.24)
+                )
+                _evg_mm_capture = None
+                if _evg_atr_pct is not None and _evg_atr_pct > 0 and _evg_mm_ae is not None:
+                    try:
+                        from src.analysis import vol_scale as _evg_vs
+                        _evg_mm_capture = _evg_vs.arm_pct(float(_evg_atr_pct), _evg_mm_ae)
+                    except Exception as _evg_mm_exc:
+                        log.warning(
+                            f"ENTRY_MIN_MOVE_ARM_CALC_FAIL | sym={symbol} "
+                            f"err='{str(_evg_mm_exc)[:150]}' | {ctx()}"
+                        )
+                _evg_mm_result = evaluate_min_move_gate(
+                    expected_capture_pct=_evg_mm_capture,
+                    round_trip_fee_pct=_evg_mm_fee_pct,
+                    min_fee_multiple=_evg_settings.min_move_fee_multiple,
+                )
+                _evg_mm_cap_str = (
+                    f"{_evg_mm_result.expected_capture_pct:.4f}"
+                    if _evg_mm_result.expected_capture_pct is not None else "NA"
+                )
+                log.info(
+                    f"ENTRY_MIN_MOVE_GATE | sym={symbol} "
+                    f"atr={_evg_atr_pct if _evg_atr_pct is not None else 'NA'} "
+                    f"arm_capture_pct={_evg_mm_cap_str} "
+                    f"required_pct={_evg_mm_result.required_pct:.4f} "
+                    f"fee_pct={_evg_mm_fee_pct:.3f} "
+                    f"multiple={_evg_settings.min_move_fee_multiple:.1f} "
+                    f"mode={_evg_settings.min_move_mode} "
+                    f"verdict={_evg_mm_result.verdict} would_block={_evg_mm_result.would_block} "
+                    f"reason={_evg_mm_result.reason} | {ctx()}"
+                )
+                if _evg_settings.min_move_mode == "enforce" and _evg_mm_result.would_block:
+                    log.warning(
+                        f"TRADE_SKIP | sym={symbol} rsn=entry_min_move_gate_blocked "
+                        f"detail='arm_capture_pct={_evg_mm_cap_str} "
+                        f"required_pct={_evg_mm_result.required_pct:.4f}' | {ctx()}"
+                    )
+                    return (False, "entry_min_move_gate_blocked")
 
         # ── Recent-Loss Gate (2026-07-17) — last-mile, independent of the ──
         # TA-based gates above (direct DB query, no ta_cache involved).

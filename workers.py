@@ -221,6 +221,48 @@ async def main() -> None:
 
     try:
         await manager.initialize()
+
+        # ── GC tuning for a long-running, allocation-heavy service ──────────
+        # 2026-08-15 (Phase 3, memory-pressure fix). Root cause of the three
+        # watchdog-caught hangs (2026-08-07 x2, 08-10): the crash dumps show
+        # "Garbage-collecting" inside kline materialization, on a 956Mi VM
+        # where this process had 386MB swapped out vs 209MB resident. A gen-2
+        # collection must walk the whole object graph -- when much of it is
+        # paged out, that walk becomes disk I/O and the event loop stalls past
+        # the 3-minute systemd watchdog.
+        #
+        # The churn is real and unavoidable at this design: strategy_worker
+        # alone materializes 2 x 50 symbols x 200 klines per tick, each row
+        # becoming a dict + an OHLCV dataclass + a parsed datetime (~60k
+        # objects/tick), and regime/structure/watchdog workers add more.
+        #
+        # Two standard mitigations, applied AFTER initialize() so the entire
+        # startup graph (imports, settings, service objects) is already built:
+        #   1. gc.freeze() moves every currently-live object into a permanent
+        #      generation that future collections never scan. That static
+        #      graph is exactly what made each gen-2 pass expensive, and it is
+        #      never garbage anyway -- these objects live for process lifetime.
+        #   2. A larger gen-2 threshold so full collections run far less often.
+        #      Transient kline objects die young and are reclaimed in gen-0/1,
+        #      which is unaffected.
+        # Neither changes correctness -- only when/how much the collector
+        # scans. Reverting is a one-line delete.
+        try:
+            import gc as _gc
+
+            _gc.collect()          # settle startup garbage first
+            _gc.freeze()           # exempt the static startup graph from scans
+            _g0, _g1, _g2 = _gc.get_threshold()
+            _gc.set_threshold(_g0, _g1, max(_g2, 50))
+            log.info(
+                f"GC_TUNED | frozen={_gc.get_freeze_count()} "
+                f"thresholds={_gc.get_threshold()} prev_gen2={_g2} | "
+                f"reduces gen-2 scan cost + frequency (Phase 3 memory fix)"
+            )
+        except Exception as e:
+            # Never let a GC tuning failure stop the trading system.
+            log.warning(f"GC_TUNE_FAIL | err='{str(e)[:150]}' | continuing")
+
         # 2026-08-01 hang fix (Phase 2): tell systemd we're up. Paired with
         # Type=notify + WatchdogSec in the unit file -- the periodic
         # WATCHDOG=1 ping lives in WorkerManager._system_health_loop,

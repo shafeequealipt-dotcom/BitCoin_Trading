@@ -304,34 +304,40 @@ def test_symbol_breaker_settings_rejects_negative_max_loss_count() -> None:
 
 
 def test_min_move_below_required_blocks() -> None:
-    # fee=0.11%, multiple=3.0 -> required 0.33%; tp_dist=0.2% is below it
+    # fee=0.24%, multiple=2.5 -> required 0.60%; an arm of 0.30% is below it
+    # (that is a ~0.20%-ATR coin: it cannot lock profit above its own cost).
     result = evaluate_min_move_gate(
-        tp_distance_pct=0.2, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+        expected_capture_pct=0.30, round_trip_fee_pct=0.24, min_fee_multiple=2.5,
     )
     assert result.verdict == VERDICT_BLOCK
     assert result.would_block is True
-    assert abs(result.required_pct - 0.33) < 1e-9
+    assert result.reason == "capture_below_fee_multiple"
+    assert abs(result.required_pct - 0.60) < 1e-9
 
 
 def test_min_move_at_or_above_required_passes() -> None:
+    # arm of 0.60% == required 0.60% (a 0.40%-ATR coin at arm_r=1.5): boundary passes
     result = evaluate_min_move_gate(
-        tp_distance_pct=0.4, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+        expected_capture_pct=0.60, round_trip_fee_pct=0.24, min_fee_multiple=2.5,
     )
     assert result.verdict == VERDICT_PASS
     assert result.would_block is False
+    assert result.reason == "capture_clears_fee"
 
 
-def test_min_move_none_distance_fails_open() -> None:
+def test_min_move_none_capture_fails_open() -> None:
+    """ATR unavailable -> cannot compute the arm -> must not block."""
     result = evaluate_min_move_gate(
-        tp_distance_pct=None, round_trip_fee_pct=0.11, min_fee_multiple=3.0,
+        expected_capture_pct=None, round_trip_fee_pct=0.24, min_fee_multiple=2.5,
     )
     assert result.verdict == VERDICT_UNKNOWN_PASS
     assert result.would_block is False
+    assert result.reason == "expected_capture_unavailable"
 
 
 def test_min_move_zero_multiple_is_kill_switch() -> None:
     result = evaluate_min_move_gate(
-        tp_distance_pct=0.01, round_trip_fee_pct=0.11, min_fee_multiple=0,
+        expected_capture_pct=0.01, round_trip_fee_pct=0.24, min_fee_multiple=0,
     )
     assert result.verdict == VERDICT_PASS
     assert result.would_block is False
@@ -341,7 +347,7 @@ def test_min_move_settings_defaults() -> None:
     settings = EntryVolumeGateSettings()
     assert settings.min_move_enabled is True
     assert settings.min_move_mode == "observe"
-    assert settings.min_move_fee_multiple == 3.0
+    assert settings.min_move_fee_multiple == 2.5
 
 
 def test_min_move_settings_rejects_invalid_mode() -> None:

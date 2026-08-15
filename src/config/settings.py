@@ -681,18 +681,29 @@ class BrainSettings:
     # 2026-08-02 (trade-data audit fix #4) — CALL_B's discretionary early
     # "close" actions on existing positions (close_reason="strategic_review",
     # see layer_manager._execute_position_actions) had NO downstream quality
-    # gate: whatever the brain's narrative said, it executed. 404-trade audit
-    # found this close_reason at 34.6% win rate, -$30 total, the worst
-    # non-force-close exit class. Gated to require the position's CURRENT
-    # pnl% to already be outside a small near-flat band before a "close" (not
-    # "take_profit") action is allowed through -- a genuine win or a genuine
-    # loss is real information; a near-flat close is closing on narrative
-    # alone with no P&L evidence either way, so it is downgraded to a no-op
-    # (falls through to the data-driven SL/TP/time-fuse mechanisms instead).
-    # take_profit actions are unaffected (already presumptively profitable).
+    # gate: whatever the brain's narrative said, it executed.
+    #
+    # 2026-08-15 (Phase 4) — CRITERION CORRECTED. The original gate blocked
+    # NEAR-FLAT closes (|pnl| < 0.3%) on the theory that they were "closing on
+    # narrative with no P&L evidence." Observe-mode data disproved it exactly
+    # backwards: of 30 strategic closes, the 10 near-flat ones it would have
+    # blocked were the PROFITABLE subset (+$8.71), while the losses lived in
+    # the decisive ones (-$34.67). Splitting by sign instead is far clearer:
+    # closes taken in profit made +$38.82 (15 trades, the brain banking wins
+    # correctly) and closes taken at a loss made -$64.77 (15 trades).
+    #
+    # So the right question is "should CALL_B be allowed to close an
+    # UNDERWATER position at all, or should that defer to the purpose-built
+    # loss cap / stop-loss?" -- and the gate now tests that. It remains in
+    # "observe" because the counterfactual is genuinely unresolved: those
+    # losing closes averaged -0.72% while the loss cap sits at 1.25% of
+    # notional, so deferring to the cap could book BIGGER losses, not smaller.
+    # Enforce only once observe-mode data settles it.
     strategic_close_gate_enabled: bool = True
     strategic_close_gate_mode: str = "observe"
-    strategic_close_min_abs_pnl_pct: float = 0.3
+    # Block a discretionary "close" when the position's current pnl% is below
+    # this (signed, not absolute). 0.0 = block every underwater close.
+    strategic_close_min_pnl_pct: float = 0.0
 
     # Claude CLI subprocess timing (moved out of manager.py hardcodes)
     claude_cli_timeout_seconds: int = 300
@@ -4740,7 +4751,12 @@ class AdaptiveExitSettings:
     enabled: bool = False
 
     # ── The fee floor: the spine. Every profit threshold floors at this. ──
-    round_trip_fee_pct: float = 0.11   # canonical round-trip taker fee for exit geometry
+    # 2026-08-15 (Phase 2 fee honesty) — 0.11 -> 0.24. 0.11 was the theoretical
+    # taker fee (0.055% x 2); the MEASURED all-in round-trip cost over 263 live
+    # trades is 0.2398% of notional (the difference is slippage/spread). Every
+    # profit threshold floors at this, so understating it let the system lock
+    # "wins" that could not clear their own transaction cost.
+    round_trip_fee_pct: float = 0.24   # MEASURED all-in round-trip cost (fee + slippage)
     fee_floor_buffer: float = 1.0      # fee floor = round_trip_fee_pct * buffer
 
     # R smoothing — EMA on the per-position movement unit so the geometry
@@ -5112,7 +5128,9 @@ class LossCuttingSettings:
     # net is bounded; it NEVER loosens the cap guarantee. Must equal the
     # round-trip taker fee (_BYBIT_TAKER_FEE_PER_SIDE 0.055% x 2 = 0.11%); 0 is
     # the clean off-switch (restores the gross cap). PROVISIONAL — a starting point.
-    cap_round_trip_fee_pct: float = 0.11
+    # 2026-08-15 (Phase 2 fee honesty): 0.11 -> 0.24, matching the measured
+    # all-in cost in adaptive_exit.round_trip_fee_pct.
+    cap_round_trip_fee_pct: float = 0.24
     # When the cap distance falls inside the gateway min-distance (un-placeable
     # as an SL on high/extreme coins), enforce the cap by a coordinator force-
     # close when realized PnL reaches the cap distance, never a clamped SL.
@@ -5340,12 +5358,18 @@ class EntryVolumeGateSettings:
         min_move_enabled: Master switch for the minimum-expected-move
             fee gate (2026-08-02).
         min_move_mode: "observe" or "enforce" — min-move gate.
-        min_move_fee_multiple: TP distance must be at least this many
-            multiples of ``settings.adaptive_exit.round_trip_fee_pct``
-            (the shared canonical fee constant, not a duplicate). <= 0
-            is a no-op kill switch. 0-5min-hold trades audited at 70.6%
-            win rate but NEGATIVE total pnl -- pure fee churn on TPs
-            sized too close to round-trip cost.
+        min_move_fee_multiple: The REALISTIC capture (the adaptive-exit
+            arm level, = max(arm_r x ATR%, fee_floor)) must be at least
+            this many multiples of
+            ``settings.adaptive_exit.round_trip_fee_pct`` (the shared
+            measured constant, not a duplicate). <= 0 is a no-op kill
+            switch. 2026-08-15 (Phase 2): 3.0 -> 2.5. With the fee
+            corrected to its measured 0.24% and arm_r=1.5, a multiple of
+            2.5 requires arm >= 0.60%, i.e. an effective ATR floor of
+            0.40% -- the point where bucketed live data stops being
+            net-negative after costs, while still keeping ~60% of trades.
+            (3.0 would imply ATR >= 0.48% and keep only ~49%; that felt
+            like over-tightening on PRE-Phase-1 capture economics.)
     """
     enabled: bool = True
     mode: str = "observe"
@@ -5364,7 +5388,7 @@ class EntryVolumeGateSettings:
     symbol_breaker_max_loss_count: int = 3
     min_move_enabled: bool = True
     min_move_mode: str = "observe"
-    min_move_fee_multiple: float = 3.0
+    min_move_fee_multiple: float = 2.5
 
     def __post_init__(self) -> None:
         if self.mode not in ("observe", "enforce"):
@@ -5990,8 +6014,8 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         strategic_close_gate_mode=str(
             data.get("strategic_close_gate_mode", "observe")
         ),
-        strategic_close_min_abs_pnl_pct=float(
-            data.get("strategic_close_min_abs_pnl_pct", 0.3)
+        strategic_close_min_pnl_pct=float(
+            data.get("strategic_close_min_pnl_pct", 0.0)
         ),
         # P2-1 (2026-05-13): first-byte deadline. See BrainSettings docstring.
         claude_cli_first_byte_timeout_seconds=int(

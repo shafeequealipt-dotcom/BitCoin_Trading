@@ -318,21 +318,28 @@ glm_max_retries = 2
 # coin's volatility line in the strategist prompt. Advisory only; never gates or
 # resizes. Default false. See ENTRY_GAPS_AND_TIMEFRAME_INVESTIGATION_FINDINGS.md.
 entry_magnitude_advisory_enabled = true
-# 2026-08-02 (trade-data audit fix #4) — CALL_B's discretionary early "close"
-# actions on existing positions (close_reason="strategic_review") had no
-# downstream quality gate. 404-trade audit: 34.6% win rate, -$30 total, the
-# worst non-force-close exit class. Gates a "close" (not "take_profit") on a
-# near-flat position (within +/-min_abs_pct of breakeven, no P&L evidence
-# either way) back to a no-op, deferring to SL/TP/time-fuse instead.
-# OPERATOR DECISION (2026-08-02): shipping in "observe" mode, NOT "enforce"
-# like the entry gates above — this touches live position exits rather than
-# entries, and there is no counterfactual data yet showing what these closes
-# would have done if left alone (they were quality issues in aggregate, not
-# necessarily individually wrong). Watch STRATEGIC_CLOSE_GATE logs; flip to
-# "enforce" once observed would_block rate/outcomes look right.
+# CALL_B discretionary-close gate (2026-08-02; CRITERION CORRECTED 2026-08-15).
+# The brain's early "close" actions (close_reason="strategic_review") had no
+# downstream quality gate.
+#
+# The original criterion blocked NEAR-FLAT closes. Observe-mode data disproved
+# it exactly backwards: of 30 strategic closes, the 10 near-flat ones it would
+# have blocked were the PROFITABLE subset (+$8.71), while the money was lost on
+# the decisive ones (-$34.67). Splitting by SIGN is the clear cut instead:
+# closes taken in profit made +$38.82 (15 trades — the brain banks wins well),
+# closes taken at a loss made -$64.77 (15 trades).
+#
+# So the gate now asks the right question: should the brain be closing
+# UNDERWATER positions at all, or should that defer to the purpose-built loss
+# cap / stop-loss? min_pnl_pct is SIGNED (0.0 = block every underwater close).
+#
+# STILL "observe", deliberately: the counterfactual is genuinely unresolved.
+# Those losing closes averaged -0.72% while the loss cap sits at 1.25% of
+# notional, so deferring to the cap could book BIGGER losses, not smaller.
+# Flip to "enforce" only once observe-mode data settles that.
 strategic_close_gate_enabled = true
 strategic_close_gate_mode = "observe"
-strategic_close_min_abs_pnl_pct = 0.3
+strategic_close_min_pnl_pct = 0.0
 # Issue 4 (CALL_A exploit/fetch, 2026-06-05) — strategy-evidence freshness.
 # A coin's "Strategies: N fired" consensus read older than this many seconds is
 # labelled STALE on the zero-fired line so the brain weighs a stale two-sided
@@ -2402,7 +2409,14 @@ safety_floor_reassert = true
 enabled = true
 
 # The fee floor — the spine. Every profit threshold floors at this.
-round_trip_fee_pct = 0.11          # canonical round-trip taker fee for exit geometry
+# 2026-08-15 (Phase 2 fee honesty) — 0.11 -> 0.24. The 0.11 was the THEORETICAL
+# Bybit taker fee (0.055% x 2). Measured against 12 days of real equity vs booked
+# PnL, the true all-in round-trip cost is 0.2398% of notional (263 trades, a
+# consistent -$1.43/trade gap between +$121 gross and -$260 actual equity). The
+# extra ~0.13% is slippage/spread, not listed fees. Every profit threshold floors
+# at this value, so understating it meant the system was locking "wins" that
+# could not actually clear their own transaction cost.
+round_trip_fee_pct = 0.24          # MEASURED all-in round-trip cost (fee + slippage)
 fee_floor_buffer = 1.0             # fee floor = round_trip_fee_pct * buffer
 
 # R smoothing — EMA on the per-position movement unit (alpha in (0,1]; 1.0 = off).
@@ -2522,7 +2536,11 @@ cap_pct_of_notional_old = 0.5
 # the placed cap SL) so the realized net lands at or under the ceiling. TIGHTENS
 # gross so net is bounded; never loosens. Must equal the round-trip taker fee
 # (0.055% x 2 = 0.11%); 0 = off (gross cap). PROVISIONAL.
-cap_round_trip_fee_pct = 0.11
+# 2026-08-15 (Phase 2 fee honesty): 0.11 -> 0.24, matching the measured all-in
+# round-trip cost used by adaptive_exit.round_trip_fee_pct. This TIGHTENS the
+# gross cap budget slightly (so realized NET lands at the ceiling as intended)
+# — on a $598 notional the 1.25% cap goes from ~$6.81 to ~$6.04 net budget.
+cap_round_trip_fee_pct = 0.24
 # When the cap distance falls inside the gateway min-distance (un-placeable as an
 # SL on high/extreme coins), enforce the cap by a coordinator force-close when
 # realized PnL reaches the cap distance, never a clamped wrong-distance SL.
@@ -3706,21 +3724,31 @@ symbol_breaker_lookback_hours = 48.0
 symbol_breaker_max_cumulative_loss_usd = 10.0
 symbol_breaker_max_loss_count = 3
 
-# ── Minimum-expected-move fee gate (2026-08-02) — same section, indep. knob ──
-# 404-trade audit: the 0-5min hold bucket has a 70.6% win rate (the direction
-# calls are fine) but NEGATIVE total pnl ($-28.71) -- pure fee churn from TPs
-# sized too close to the round-trip taker fee. Blocks trades whose TP
-# distance doesn't clear min_move_fee_multiple x the CANONICAL round-trip
-# fee (settings.adaptive_exit.round_trip_fee_pct = 0.11%, shared with the
-# loss-cap's net-aware budgeting -- not a duplicate constant), so at 3.0x
-# that's a 0.33% minimum TP distance.
+# ── Minimum-expected-move fee gate — REWRITTEN 2026-08-15 (Phase 2) ──────────
+# The 2026-08-02 version was a NO-OP: it compared the brain's PLANNED take-
+# profit (averaging ~6.5%) against a 0.33% threshold, so it blocked 0 of 1039
+# trades. The flaw was comparing an aspirational number to a real cost — live
+# trades captured only 10.6% of their planned target.
 #
-# OPERATOR DECISION (2026-08-02): enforcing on first deploy, same trade-off
-# as the volume/ATR/recent-loss/symbol-breaker gates above. Revert instantly
-# via min_move_mode = "observe". min_move_fee_multiple = 0 is a kill switch.
+# It now compares the REALISTIC capture: the adaptive-exit arm level
+# (max(arm_r x ATR%, fee_floor)) — the smallest move that must occur for a
+# "win" to be bankable at all — against min_move_fee_multiple x the MEASURED
+# round-trip cost (adaptive_exit.round_trip_fee_pct, now 0.24% not 0.11%).
+# If a coin cannot move far enough to lock profit above its own transaction
+# cost, the trade is structurally unprofitable however good the direction call.
+#
+# Evidence: bucketing 283 live trades by entry ATR and subtracting the real
+# 0.2398% cost, every band below ~ATR 0.40% is net-negative — and win rate
+# FALLS as ATR rises (60.9% -> 45.3%) while net PnL improves, proving the
+# binding constraint is move size vs fixed cost, not accuracy.
+#
+# With arm_r=1.5 and fee=0.24, multiple 2.5 requires arm >= 0.60%, i.e. an
+# effective ATR floor of 0.40%, keeping ~60% of trades. (3.0 would imply ATR
+# >= 0.48% and keep only ~49% — over-tightening on pre-Phase-1 economics.)
+# Revert instantly via min_move_mode = "observe"; 0 multiple is a kill switch.
 min_move_enabled = true
 min_move_mode = "enforce"
-min_move_fee_multiple = 3.0
+min_move_fee_multiple = 2.5
 
 # ── Worker liveness watchdog (Phase 11 dead-workers fix) ────────────
 # Watchdog probes the per-worker liveness tracker every interval and

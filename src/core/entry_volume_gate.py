@@ -358,40 +358,59 @@ class MinMoveGateResult:
 
     Mirrors ``ATRGateResult``'s shape (fail-open on missing data) — see its
     docstring for the meaning of each shared field.
+
+    ``expected_capture_pct`` is the REALISTIC first-lock profit level (the
+    adaptive-exit arm), not the brain's aspirational take-profit target.
+    See ``evaluate_min_move_gate`` for why that distinction is the whole
+    point of this gate.
     """
     verdict: str
     would_block: bool
-    tp_distance_pct: float | None
+    expected_capture_pct: float | None
     required_pct: float
     reason: str
 
 
 def evaluate_min_move_gate(
-    tp_distance_pct: float | None,
+    expected_capture_pct: float | None,
     round_trip_fee_pct: float,
     min_fee_multiple: float,
 ) -> MinMoveGateResult:
-    """Evaluate whether a proposed trade's TP target clears round-trip fees
-    by a comfortable margin.
+    """Evaluate whether a trade's REALISTIC profit capture clears round-trip
+    cost by a comfortable margin.
 
-    404-trade audit found the 0-5min hold bucket at a 70.6% win rate yet
-    NEGATIVE total PnL ($-28.71) -- pure fee churn: the win rate says the
-    direction calls are fine, but TPs sized too close to the round-trip fee
-    cost more in fees than they clear in price movement. This gate blocks
-    trades whose TP distance doesn't clear a multiple of the fee, catching
-    the failure mode before the fact rather than after 100+ paper cuts.
+    ## Why this compares the arm, not the take-profit target (2026-08-15)
+
+    The first version of this gate compared the brain's PLANNED take-profit
+    distance against the fee. That made it a no-op: planned TPs average
+    ~6.5% while the threshold was 0.33%, so it blocked 0 of 1039 trades.
+    The flaw was comparing an aspirational number to a real cost — live
+    trades captured only 10.6% of their planned target, so planned TP says
+    nothing about what the trade will actually bank.
+
+    The honest input is the level at which the exit machinery first locks
+    profit — ``vol_scale.arm_pct(R, adaptive_exit)`` where ``R`` is the
+    coin's ATR%. That is the smallest move the trade must make for a
+    "win" to be bankable at all. If THAT cannot clear the round-trip cost
+    by a healthy multiple, the trade is structurally unprofitable no
+    matter how good the direction call is.
+
+    Empirical backing: bucketing 283 live trades by entry ATR and
+    subtracting the measured 0.2398% round-trip cost, every band below
+    ATR ~1.0% was net-negative pre-Phase-1, and win rate FELL as ATR rose
+    (60.9% -> 45.3%) while net PnL improved — proof the binding constraint
+    is move size versus fixed cost, not direction accuracy.
 
     Args:
-        tp_distance_pct: abs(tp_price - entry_price) / entry_price * 100,
-            or None when the caller couldn't compute it (e.g. tp_price not
-            yet finalized at this point in the pipeline).
-        round_trip_fee_pct: The canonical round-trip taker fee percent
-            (``settings.adaptive_exit.round_trip_fee_pct``) — one number
-            shared with the loss-cap's net-aware budgeting, not a new
-            fee constant.
-        min_fee_multiple: TP distance must be at least this many multiples
-            of the round-trip fee. <= 0 disables the gate entirely (always
-            passes) — the config-level kill switch.
+        expected_capture_pct: The realistic first-lock profit level as a
+            percent of entry (the adaptive-exit arm). None when the caller
+            could not compute it (e.g. ATR unavailable) -> fail-open.
+        round_trip_fee_pct: Measured all-in round-trip cost percent
+            (``settings.adaptive_exit.round_trip_fee_pct``) — the single
+            shared constant, not a new fee number.
+        min_fee_multiple: Capture must be at least this many multiples of
+            the round-trip cost. <= 0 disables the gate (always passes) —
+            the config-level kill switch.
 
     Returns:
         MinMoveGateResult with the verdict and would_block flag. The
@@ -402,23 +421,23 @@ def evaluate_min_move_gate(
     if min_fee_multiple <= 0:
         return MinMoveGateResult(
             verdict=VERDICT_PASS, would_block=False,
-            tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
+            expected_capture_pct=expected_capture_pct, required_pct=_required_pct,
             reason="gate_disabled_threshold_zero",
         )
-    if tp_distance_pct is None:
+    if expected_capture_pct is None:
         return MinMoveGateResult(
             verdict=VERDICT_UNKNOWN_PASS, would_block=False,
-            tp_distance_pct=None, required_pct=_required_pct,
-            reason="tp_distance_unavailable",
+            expected_capture_pct=None, required_pct=_required_pct,
+            reason="expected_capture_unavailable",
         )
-    if tp_distance_pct < _required_pct:
+    if expected_capture_pct < _required_pct:
         return MinMoveGateResult(
             verdict=VERDICT_BLOCK, would_block=True,
-            tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
-            reason="tp_distance_below_fee_multiple",
+            expected_capture_pct=expected_capture_pct, required_pct=_required_pct,
+            reason="capture_below_fee_multiple",
         )
     return MinMoveGateResult(
         verdict=VERDICT_PASS, would_block=False,
-        tp_distance_pct=tp_distance_pct, required_pct=_required_pct,
-        reason="tp_distance_ok",
+        expected_capture_pct=expected_capture_pct, required_pct=_required_pct,
+        reason="capture_clears_fee",
     )
