@@ -351,10 +351,10 @@ FOR EACH NEW TRADE, SPECIFY:
 - direction: Buy or Sell (you CAN short)
 - stop_loss_price: EXACT price below support (buys) or above resistance (sells)
 - take_profit_price: EXACT price at nearest resistance (buys) or support (sells)
-- max_hold_minutes: how long before auto-close (15-60; PREFER 15-25 for quick scalps and mean-reversion, longer only for genuine momentum with room to run)
+- max_hold_minutes: how long before auto-close (30-120; PREFER 45-90 — trades need room to reach their target, and a position closed while still flat is just a fee paid for nothing)
 - leverage: 1-5x based on conviction
 - size_usd is the MARGIN (the cash) you commit for THIS trade — NOT the position size. Your actual exchange position = size_usd x leverage, so do NOT multiply by leverage yourself. The ACCOUNT block gives the per-trade MARGIN budget ("Per-trade size limit: $Y" = Usable / Maximum concurrent positions), "Available for new trades" (margin still free), and "Maximum concurrent positions" (N). A NEW CYCLE RUNS EVERY ~5 MINUTES and positions ACCUMULATE toward N, so do NOT spend the whole pool now. Set size_usd to about that per-trade margin budget, scaled by conviction (strong setup a bit more, borderline a bit less). Keep the sum of your trades' size_usd within "Available for new trades"; leave room for the trades the next cycles will open. Probe-size trades are not wanted, but neither is draining the book in one cycle. For a quick small scalp or a borderline both-direction play, deliberately size SMALLER (well under the per-trade budget) — small size on a short hold is how you take more genuine plays without over-committing to any one read.
-- trailing_activation_pct: at what profit % to activate trailing (0.3-0.8 — activate early to lock small wins; most trades close below +1%)
+- trailing_activation_pct: at what profit % to activate trailing (1.2-2.5 — do NOT arm inside the noise band; a trail set below ~1.5% gets tapped by ordinary volatility and closes the trade before the thesis resolves)
 - thesis_invalidation: the criterion under which this thesis no longer holds (see THESIS INVALIDATION below). Information for the watchdog and for your future self — not a stop-loss substitute.
 - reasoning: cite the specific exploitation play and the per-coin evidence that supports it.
 
@@ -737,10 +737,10 @@ FOR EACH NEW TRADE, SPECIFY:
 - direction: "Buy" or "Sell" (you CAN short)
 - stop_loss_price: EXACT price below support (buys) or above resistance (sells)
 - take_profit_price: EXACT price at nearest resistance (buys) or support (sells)
-- max_hold_minutes: 15-60 (PREFER 15-25 for quick scalps and mean-reversion, longer only for genuine momentum with room to run)
+- max_hold_minutes: 30-120 (PREFER 45-90 — a position closed while still flat is just a fee paid for nothing)
 - leverage: 1-5x based on conviction
 - size_usd is the MARGIN (the cash) you commit for THIS trade — NOT the position size. Your actual exchange position = size_usd x leverage, so do NOT multiply by leverage yourself. The ACCOUNT block gives the per-trade MARGIN budget ("Per-trade size limit: $Y" = Usable / Maximum concurrent positions), "Available for new trades" (margin still free), and "Maximum concurrent positions" (N). A NEW CYCLE RUNS EVERY ~5 MINUTES and positions ACCUMULATE toward N, so do NOT spend the whole pool now. Set size_usd to about that per-trade margin budget, scaled by conviction (strong setup a bit more, borderline a bit less). Keep the sum of your trades' size_usd within "Available for new trades"; leave room for the trades the next cycles will open. Probe-size trades are not wanted, but neither is draining the book in one cycle. For a quick small scalp or a borderline both-direction play, deliberately size SMALLER (well under the per-trade budget) — small size on a short hold is how you take more genuine plays without over-committing to any one read.
-- trailing_activation_pct: 0.3-0.8
+- trailing_activation_pct: 1.2-2.5 (never below 1.5 — inside the noise band)
 - thesis_invalidation: criterion under which the thesis no longer holds (see THESIS INVALIDATION below). Information for the watchdog and for your future self — not a stop-loss substitute.
 - reasoning: cite the SPECIFIC per-coin evidence that pushed conviction. Generic reasoning ("good setup", "looks bullish") is rejected.
 
@@ -7102,8 +7102,9 @@ class ClaudeStrategist:
             default_tp_pct=_safe_float(data.get("default_tp_pct"), 2.5),
             default_hold_minutes=_safe_int(data.get("default_hold_minutes"), 30),
             default_leverage=_safe_int(data.get("default_leverage"), 2),
+            # 2026-08-14 (Phase 1): fallback 0.5 -> 1.5 (inside noise band).
             trailing_activation_pct=_safe_float(
-                data.get("trailing_activation_pct"), 0.5
+                data.get("trailing_activation_pct"), 1.5
             ),
             focus_coins=data.get("focus_coins", []),
             avoid_coins=data.get("avoid_coins", []),
@@ -7324,8 +7325,9 @@ class ClaudeStrategist:
             default_tp_pct=_safe_float(data.get("default_tp_pct"), 2.5),
             default_hold_minutes=_safe_int(data.get("default_hold_minutes"), 30),
             default_leverage=_safe_int(data.get("default_leverage"), 2),
+            # 2026-08-14 (Phase 1): fallback 0.5 -> 1.5 (inside noise band).
             trailing_activation_pct=_safe_float(
-                data.get("trailing_activation_pct"), 0.5
+                data.get("trailing_activation_pct"), 1.5
             ),
             focus_coins=data.get("focus_coins", []),
             avoid_coins=data.get("avoid_coins", []),

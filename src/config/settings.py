@@ -814,7 +814,10 @@ class BrainSettings:
     # and NOT an enable lever — the prompt's prose carries the instruction; these
     # make the intended target explicit and tuning-ready. Tuning starting points.
     brain_target_play_count: int = 3
-    brain_preferred_hold_minutes_max: int = 25
+    # 2026-08-14 (Phase 1 exit-geometry realign): 25 -> 75. The 20-minute
+    # median hold was closing trades long before their planned targets could
+    # resolve (winners captured only 10.6% of planned TP).
+    brain_preferred_hold_minutes_max: int = 75
 
     # Brain-prompt-enrichment Phase 3.2 (2026-05-16) — vote opposition
     # characterization per candidate. The legacy votes block surfaced
@@ -1406,17 +1409,17 @@ class WatchdogSettings:
     brain_cooldown_seconds: int = 120
     partial_close_pct: float = 50.0
     max_brain_calls_per_hour: int = 10
-    # 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60. 404-trade audit:
-    # the 15-30min hold bucket has a 25.7% win rate and -$81.44 total (the
-    # single worst bucket), vs 70.6%/62.3% for 0-5/5-15min and a genuinely
-    # profitable +$8.22 for 30-60min. A losing trade was lingering nearly its
-    # ENTIRE planned hold (95%) before being cut, landing squarely in the bad
-    # zone. The PnL-aware one-time-extension branch above this threshold check
-    # (position_watchdog.py) already spares flat/winning trades from an early
-    # cut, so tightening this percentage shortens ONLY the losing-trade tail
-    # -- the profitable 30-60min momentum cohort (which extends past its
-    # timeout while ahead or flat) is unaffected.
-    timeout_threshold_pct: float = 60.0  # % of max_hold_minutes before timeout close
+    # 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60 on the theory that
+    # the 15-30min hold bucket's 25.7% win rate meant losers were lingering.
+    # 2026-08-14 (Phase 1) — REVERTED to 95. That theory was wrong, and the
+    # per-trade forensics say so: the timeout closed 21 never-green losers at
+    # an average adverse move of just 0.269%, i.e. trades that had not resolved
+    # in EITHER direction were being booked as losses by the clock. The
+    # original 25.7% win rate was not caused by holding too long -- those were
+    # simply the trades that had not resolved yet, and cutting them sooner only
+    # converts undecided trades into realized losses (plus a round-trip fee).
+    # Correlation mistaken for causation; see Phase 1 notes.
+    timeout_threshold_pct: float = 95.0  # % of max_hold_minutes before timeout close
     early_exit_enabled: bool = False  # 0% historical win rate (24/24 losses) — SL handles exits; flip true to re-enable
     # Phase 2 (P0-1): fast set-diff reconcile cadence — independent of the
     # 5-min thesis reconcile. 0.0 disables the fast loop (kill switch).
@@ -4748,9 +4751,20 @@ class AdaptiveExitSettings:
     r_smoothing_alpha: float = 0.3
 
     # ── The arm: max(arm_r*R, fee_floor), bounded. ──
-    arm_r: float = 0.5
+    # 2026-08-14 (Phase 1 exit-geometry realign) — arm_r 0.5 -> 1.5,
+    # arm_max_pct 1.0 -> 2.5. Forensics on 283 post-fix trades: winners
+    # captured only 10.6% of their planned target, and the never-green
+    # losers died on a MEDIAN adverse move of just 1.09x ATR (44.7% inside
+    # 1x ATR -- pure noise). With R = ATR%, arm_r=0.5 armed the lock at
+    # 0.5x ATR of profit (~0.21% on a median 0.42% ATR coin) and then
+    # trailed 0.5x ATR behind the peak, so a half-ATR wiggle closed every
+    # trade in both directions. 98.4% of ALL losers were cut before ever
+    # reaching their -2.6% stop. Arming at 1.5x ATR puts the lock outside
+    # the measured noise band. arm_max_pct was a hard 1.0% ceiling that
+    # would otherwise bind on volatile coins and silently re-tighten them.
+    arm_r: float = 1.5
     arm_min_pct: float = 0.0
-    arm_max_pct: float = 1.0
+    arm_max_pct: float = 2.5
 
     # ── The ladder rungs (in R) and staged capture. ──
     rung_r: list = field(default_factory=lambda: [1.5, 3.0, 5.0])
@@ -4758,7 +4772,11 @@ class AdaptiveExitSettings:
     lock_max_pct: float = 0.0          # 0 = naturally bounded by the peak
 
     # ── The trail fraction of R behind the peak (consumed by profit_lock_pct). ──
-    trail_r: float = 0.5               # replay-tuned (peaks are ~1R, so a tight trail captures more)
+    # 2026-08-14 (Phase 1 exit-geometry realign) — 0.5 -> 1.5. This is the
+    # "how big a pullback closes me" knob: at 0.5 a mere half-ATR retrace
+    # tapped the lock, which is inside the 1.09x-ATR median move that was
+    # killing trades. 1.5R requires a genuine 1.5x-ATR reversal instead.
+    trail_r: float = 1.5
 
     # ── Profit-scaled trail tightening (2026-06-26 give-back fix). ──
     # The effective trail coefficient starts at trail_r and decays toward
@@ -4767,7 +4785,10 @@ class AdaptiveExitSettings:
     # INERT: trail_r_floor == trail_r makes the term a constant trail_r, identical
     # to the pre-fix half-R trail; activation is a single flip of trail_r_floor
     # below trail_r after the operator gate. Bounds enforced in validators.py.
-    trail_r_floor: float = 0.5         # = trail_r → inert; (0, trail_r] when active
+    # 2026-08-14 (Phase 1): raised 0.5 -> 1.5 to stay == trail_r (inert by
+    # default, per this field's original design). config.toml activates it
+    # at a proportionally-scaled 0.75 (was 0.30 against a 0.5 trail_r).
+    trail_r_floor: float = 1.5         # = trail_r → inert; (0, trail_r] when active
     trail_tighten_knee_r: float = 1.0  # no tightening until the peak clears this many R
     trail_tighten_scale_r: float = 1.0 # R above the knee over which the coefficient decays
 
@@ -6010,7 +6031,7 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         surface_top_n_voters=int(data.get("surface_top_n_voters", 10)),
         consensus_freshness_seconds=int(data.get("consensus_freshness_seconds", 360)),
         brain_target_play_count=int(data.get("brain_target_play_count", 3)),
-        brain_preferred_hold_minutes_max=int(data.get("brain_preferred_hold_minutes_max", 25)),
+        brain_preferred_hold_minutes_max=int(data.get("brain_preferred_hold_minutes_max", 75)),
         emit_vote_opposition=bool(data.get("emit_vote_opposition", True)),
         emit_category_split=bool(data.get("emit_category_split", True)),
         emit_direction_disagreement_notes=bool(
@@ -6280,7 +6301,7 @@ def _build_watchdog(data: dict[str, Any]) -> WatchdogSettings:
         brain_cooldown_seconds=data.get("brain_cooldown_seconds", 120),
         partial_close_pct=data.get("partial_close_pct", 50.0),
         max_brain_calls_per_hour=data.get("max_brain_calls_per_hour", 10),
-        timeout_threshold_pct=float(data.get("timeout_threshold_pct", 60.0)),
+        timeout_threshold_pct=float(data.get("timeout_threshold_pct", 95.0)),
         early_exit_enabled=bool(data.get("early_exit_enabled", False)),
         fast_reconcile_seconds=float(data.get("fast_reconcile_seconds", 30.0)),
         strategic_action_min_hold_seconds=float(

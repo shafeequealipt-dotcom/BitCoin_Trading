@@ -348,7 +348,11 @@ consensus_freshness_seconds = 360
 # top_n_to_brain 5 -> 3. Prompt-level guidance toward fewer, better plays;
 # never a quota. Rollback: 3.
 brain_target_play_count = 2
-brain_preferred_hold_minutes_max = 25
+# 2026-08-14 (Phase 1 exit-geometry realign): 25 -> 75. The 20-minute median
+# hold closed trades long before their planned targets could resolve —
+# winners captured only 10.6% of planned TP, and the timeout alone booked 21
+# never-green losers at an average adverse move of just 0.269%.
+brain_preferred_hold_minutes_max = 75
 
 # Definitive-fix Phase 6 (2026-04-28): cold-start completeness gate.
 # Forensic E.2.4 captured first-cycle packages at completeness=0.67
@@ -910,15 +914,15 @@ brain_trigger_loss_pct = 0.8
 brain_cooldown_seconds = 60
 partial_close_pct = 50.0
 max_brain_calls_per_hour = 20
-# 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60. 404-trade audit:
-# the 15-30min hold bucket has a 25.7% win rate and -$81.44 total (worst
-# bucket), vs 70.6%/62.3% for 0-5/5-15min and +$8.22 for 30-60min. A losing
-# trade was lingering nearly its ENTIRE planned hold (95%) before being cut,
-# landing squarely in the bad zone. The PnL-aware one-time-extension branch
-# (position_watchdog.py, just above this threshold check) already spares
-# flat/winning trades from an early cut, so this only shortens the
-# losing-trade tail -- the profitable 30-60min momentum cohort is unaffected.
-timeout_threshold_pct = 60.0
+# 2026-08-02 (trade-data audit fix #2) — pulled 95 -> 60 on the theory that
+# the 15-30min bucket's 25.7% win rate meant losers were lingering too long.
+# 2026-08-14 (Phase 1) — REVERTED to 95. The theory was wrong. Per-trade
+# forensics: the timeout closed 21 never-green losers at an average adverse
+# move of only 0.269% — trades that had not resolved in EITHER direction,
+# booked as losses by the clock (plus a round-trip fee) before their thesis
+# had any chance to play out. The 25.7% win rate was not caused by long
+# holds; those were simply the unresolved trades. Correlation != causation.
+timeout_threshold_pct = 95.0
 # Layer 3: early-exit disabled (0% historical win rate, 24/24 losses).
 # SL handles exits cleanly. Set true to re-enable; monitoring log
 # 'EARLY_EXIT_DISABLED_WOULD_FIRE' shows what it would have done.
@@ -2407,18 +2411,31 @@ fee_floor_buffer = 1.0             # fee floor = round_trip_fee_pct * buffer
 r_smoothing_alpha = 0.3
 
 # The arm: max(arm_r * R, fee_floor), bounded.
-arm_r = 0.5
+# 2026-08-14 (Phase 1 exit-geometry realign) — arm_r 0.5 -> 1.5, arm_max_pct
+# 1.0 -> 2.5. Forensics on 283 post-fix trades: winners captured only 10.6%
+# of their planned target, and never-green losers died on a MEDIAN adverse
+# move of 1.09x ATR (44.7% inside 1x ATR = pure noise). Since R = ATR%,
+# arm_r=0.5 armed the profit lock at half an ATR (~0.21% on a 0.42%-ATR coin)
+# and then trailed half an ATR behind the peak — so ordinary noise closed
+# every trade. 98.4% of ALL losers never reached their -2.6% stop. Arming at
+# 1.5x ATR puts the lock outside the measured noise band; the 1.0% ceiling
+# is raised so it cannot silently re-tighten volatile coins.
+arm_r = 1.5
 arm_min_pct = 0.0
-arm_max_pct = 1.0
+arm_max_pct = 2.5
 
 # The ladder rungs (in R) and staged capture.
 rung_r = [1.5, 3.0, 5.0]
 secure_at_3r_r = 1.5               # secured profit (in R) once the middle rung is crossed
 lock_max_pct = 0.0                 # 0 = naturally bounded by the peak
 
-# The trail fraction of R behind the peak (consumed by profit_lock_pct). 0.5R
-# tuned on the replay (realized peaks are ~1R, so a tight trail captures more).
-trail_r = 0.5
+# The trail fraction of R behind the peak (consumed by profit_lock_pct).
+# 2026-08-14 (Phase 1): 0.5 -> 1.5. This is the "how big a pullback closes me"
+# knob. The old 0.5R was tuned on a replay whose realized peaks were ~1R — but
+# that premise was itself a product of this same tight trail (circular). Live
+# forensics show a half-ATR retrace tapped the lock, well inside the 1.09x-ATR
+# median move that was killing trades. 1.5R demands a genuine reversal.
+trail_r = 1.5
 
 # Profit-scaled trail tightening (2026-06-26 give-back fix). The trail coefficient
 # starts at trail_r for young/small movers and decays toward trail_r_floor as the
@@ -2428,7 +2445,10 @@ trail_r = 0.5
 # SHIPPED INERT: trail_r_floor = trail_r = 0.5 makes the term a constant trail_r,
 # byte-identical to the pre-fix half-R trail. Activation is a single flip of
 # trail_r_floor below trail_r (replay-selected) AFTER the operator gate.
-trail_r_floor = 0.30               # ACTIVE (mild, operator-activated 2026-06-26): trail tightens toward 0.30R as the peak grows past the knee
+# 2026-08-14 (Phase 1): 0.30 -> 0.75, scaled proportionally with trail_r
+# (0.5->1.5) so the give-back tightening keeps the same RELATIVE shape
+# instead of silently becoming a 5x-tighter clamp on big winners.
+trail_r_floor = 0.75               # ACTIVE: trail tightens toward 0.75R as the peak grows past the knee
 trail_tighten_knee_r = 1.0         # no tightening until the peak clears this many R (over-tighten guard)
 trail_tighten_scale_r = 1.0        # R above the knee over which the coefficient decays toward the floor
 

@@ -53,7 +53,9 @@ class StrategicPlan:
     default_tp_pct: float = 2.5
     default_hold_minutes: int = 30
     default_leverage: int = 2
-    trailing_activation_pct: float = 0.5
+    # 2026-08-14 (Phase 1): 0.5 -> 1.5, matching TradePlan.TRAIL_ACTIVATION_
+    # FLOOR_PCT so the plan-level default no longer sits inside the noise band.
+    trailing_activation_pct: float = 1.5
 
     # Per-coin directives
     coin_directives: dict[str, CoinDirective] = field(default_factory=dict)

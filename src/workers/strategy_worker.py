@@ -2807,8 +2807,11 @@ class StrategyWorker(SweetSpotWorker):
         tp = float(trade.get("take_profit_price", 0))
         leverage = int(trade.get("leverage", 2))
         size_usd = float(trade.get("size_usd", 100))
-        max_hold = int(trade.get("max_hold_minutes", 30))
-        trail_pct = float(trade.get("trailing_activation_pct", 0.5))
+        # 2026-08-14 (Phase 1 exit-geometry realign): max_hold fallback 30 -> 60
+        # and trail fallback 0.5 -> 1.5. Trades were being closed inside the
+        # noise band (median killer = 1.09x ATR) long before their -2.6% stop.
+        max_hold = int(trade.get("max_hold_minutes", 60))
+        trail_pct = float(trade.get("trailing_activation_pct", 1.5))
         reasoning = str(trade.get("reasoning", ""))
 
         # Enrich reasoning with APEX/XRAY flip context when trade was flipped.

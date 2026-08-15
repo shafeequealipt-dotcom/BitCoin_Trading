@@ -344,7 +344,8 @@ class BrainV2:
                     target_price=tp1,
                     stop_loss_price=sl,
                     max_hold_minutes=max_hold,
-                    trailing_activation_pct=_safe_float(raw.get("trailing_activation_pct", 0.5), 0.5),
+                    # 2026-08-14 (Phase 1): fallback 0.5 -> 1.5 (noise band).
+                    trailing_activation_pct=_safe_float(raw.get("trailing_activation_pct", 1.5), 1.5),
                     trailing_distance_pct=_safe_float(raw.get("trailing_distance_pct", 50), 50),
                     size_tier=size_tier,
                     risk_reward_ratio=_safe_float(raw.get("risk_reward_ratio", 2.0), 2.0),

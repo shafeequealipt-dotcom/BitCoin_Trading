@@ -44,7 +44,12 @@ class TradePlan:
 
     # Bug 4 constants (ClassVar so dataclass treats them as class
     # attributes, not instance fields — they are not part of __init__).
-    TRAIL_ACTIVATION_FLOOR_PCT: ClassVar[float] = 1.0    # min % profit before trailing turns on
+    # 2026-08-14 (Phase 1 exit-geometry realign): 1.0 -> 1.5. The Bug-4 floor
+    # was the right idea (the Brain kept emitting 0.3-0.8 "lock tiny wins"
+    # values that strangle winners) but 1.0% still sat inside the measured
+    # noise band — live forensics put the median trade-killing adverse move at
+    # 1.09x ATR, and half of all trades are on coins whose ATR alone is ~0.4%.
+    TRAIL_ACTIVATION_FLOOR_PCT: ClassVar[float] = 1.5    # min % profit before trailing turns on
     TRAIL_MIN_DISTANCE_FRACTION: ClassVar[float] = 0.005  # 0.5% of current price below peak
 
     def __post_init__(self) -> None:
