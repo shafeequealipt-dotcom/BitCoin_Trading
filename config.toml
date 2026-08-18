@@ -283,7 +283,16 @@ use_claude_code = true
 # model — no reasoning-token-truncation risk (the failure class that hit
 # both glm-4.7-flash-free and Cloudflare's GLM-5.2). Revert instantly by
 # setting this back to "glm_cloudflare" or "claude_code".
-provider = "zenmux"
+# 2026-08-18 OUTAGE FIX: ZenMux returned HTTP 403 access_denied on EVERY chat
+# completion from 2026-08-16 01:06 onward — account-level, not model-level
+# (the /models endpoint still returns 200, and all 8 currently-free models
+# 403 identically). Root cause: inclusionai/ling-3.0-flash silently went from
+# $0/M to paid ($0.021/M prompt, $0.063/M completion) and the account has no
+# billing, so inference is denied outright. Groq is ALSO 403 now. Result was
+# ~2.5 days of zero trades (last close 2026-08-15 06:35).
+# Falling back to Cloudflare: free, previously proven in production, verified
+# working (HTTP 200, 1.8s, valid JSON) at the time of this change.
+provider = "glm_cloudflare"
 zenmux_model = "inclusionai/ling-3.0-flash"
 zenmux_max_tokens = 2048
 zenmux_temperature = 0.3
@@ -523,7 +532,13 @@ tias_cause_max_chars = 120
 # Position protection (SL/TP/stall-cuts) is UNAFFECTED -- PositionWatchdog runs on
 # its own much faster watchdog_interval (30s) independent of this. Only the brain's
 # own new-trade-finding (Call A) and AI position-review (Call B) cadence changes.
-strategic_interval = 150
+# 2026-08-18: back to 2700 because the Cloudflare fallback is bound by a
+# 10,000 Neurons/day free tier at ~273 Neurons/call — 150s (576 calls/day)
+# would blow that budget ~15x and 429 for most of the day. 2700s = ~32
+# calls/day fits with margin. This is the SAME constraint that forced 2700
+# originally (commit 1a32c27); it is a provider limit, not a strategy choice.
+# Restore 150 the moment a provider without a hard daily cap is available.
+strategic_interval = 2700
 # Watchdog Claude review interval (seconds) — reviews positions every 30s
 watchdog_interval = 30
 # Legacy settings kept for backward compatibility
