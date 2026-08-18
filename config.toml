@@ -3808,3 +3808,32 @@ staleness_multiplier = 2.5
 staleness_floor_sec = 600
 alert_rate_limit_sec = 3600
 
+# ── Trade-Activity Watchdog (2026-08-18) — "up but not trading" detection ──
+# Built after a 2.5-day SILENT outage: the LLM provider (ZenMux) returned
+# HTTP 403 on EVERY completion from 2026-08-16 01:06 and nothing noticed.
+# systemd showed active, every worker heartbeat was green, and brain_liveness
+# above stayed healthy — because the brain loop genuinely WAS progressing, it
+# just failed its API call every cycle. Equity sat frozen for three days.
+#
+# The liveness watchdogs answer "is the process progressing?". This one asks
+# the outcome question — "is it still placing trades?" — which is the only
+# kind of check that catches a provider returning clean, well-formed
+# rejections.
+#
+# Two signals, deliberately different severities:
+#   max_consecutive_failures -> CRITICAL. Precise and immediately actionable
+#     (the brain client already maintains this streak, so a provider outage
+#     drives it up within minutes). 3 rules out a single transient blip.
+#   no_trade_alert_hours     -> WARNING. Broad backstop for silent failures
+#     that never raise an API error. Deliberately generous at 12h: quiet
+#     markets legitimately produce no trades and the entry gates block most
+#     candidates BY DESIGN. A watchdog that cries wolf gets muted, which
+#     would recreate the very blindness this exists to remove.
+# Set either to 0 to disable that check independently.
+[trade_activity]
+enabled = true
+watchdog_interval_sec = 60
+max_consecutive_failures = 3
+no_trade_alert_hours = 12.0
+alert_rate_limit_sec = 3600
+

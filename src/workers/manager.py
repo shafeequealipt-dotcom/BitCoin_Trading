@@ -2295,6 +2295,51 @@ class WorkerManager:
                 err=str(e)[:120],
             )
 
+        # 2026-08-18 (silent-outage fix) — TradeActivityWatchdog.
+        # The liveness watchdogs above answer "is the process progressing?".
+        # During the 2026-08-16 ZenMux 403 outage the honest answer was YES
+        # for 2.5 days: every worker ticked, the brain loop wrote its
+        # heartbeat every iteration, systemd showed active — while CALL_A
+        # ended status=failed on every cycle and the bot placed zero trades.
+        # This worker asks the outcome question instead ("is it still
+        # TRADING?"), which is the only kind of check that catches a provider
+        # returning clean, well-formed rejections. See
+        # src/core/trade_activity.py for the full incident write-up.
+        #
+        # `self._services` is passed by reference (not copied) so the lazy
+        # per-tick lookup sees claude_client even though it is registered
+        # earlier/later in boot, and survives a provider swap replacing it.
+        try:
+            from src.workers.trade_activity_watchdog import TradeActivityWatchdog
+
+            ta_settings = getattr(s, "trade_activity", None)
+            if ta_settings is not None and ta_settings.enabled:
+                trade_activity_watchdog = TradeActivityWatchdog(
+                    s,
+                    db,
+                    services=self._services,
+                    watchdog_interval_sec=float(ta_settings.watchdog_interval_sec),
+                    max_consecutive_failures=int(ta_settings.max_consecutive_failures),
+                    no_trade_alert_hours=float(ta_settings.no_trade_alert_hours),
+                    alert_rate_limit_sec=float(ta_settings.alert_rate_limit_sec),
+                    alert_manager=self._services.get("alert_manager"),
+                )
+                self.workers.append(trade_activity_watchdog)
+                self._services["trade_activity_watchdog"] = trade_activity_watchdog
+                log.info(
+                    "TRADE_ACTIVITY_WATCHDOG_INIT | fail_thr={ft} "
+                    "no_trade_thr_h={nt:.1f} interval_s={iv:.0f}",
+                    ft=int(ta_settings.max_consecutive_failures),
+                    nt=float(ta_settings.no_trade_alert_hours),
+                    iv=float(ta_settings.watchdog_interval_sec),
+                )
+        except Exception as e:
+            log.warning(
+                "TRADE_ACTIVITY_WATCHDOG_INIT_FAIL | err='{err}' | "
+                "manager_continues_without_watchdog",
+                err=str(e)[:120],
+            )
+
         for w in self.workers:
             self.health.register(w)
 

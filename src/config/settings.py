@@ -4428,6 +4428,39 @@ class WorkerLivenessSettings:
 
 
 @dataclass
+class TradeActivitySettings:
+    """TradeActivityWatchdog tunables (2026-08-18 — silent-outage detection).
+
+    Built after a 2.5-day outage in which the LLM provider returned HTTP 403
+    on every call while systemd, all worker heartbeats, and
+    BrainLivenessWatchdog reported perfect health. Heartbeat checks answer
+    "is the process progressing?" — during that outage the honest answer was
+    yes. Nobody was asking "is it still placing trades?". See
+    src/core/trade_activity.py for the full incident.
+
+    Attributes:
+        enabled: Master switch. False = the watchdog is never constructed.
+        watchdog_interval_sec: Probe cadence in seconds. Default 60.
+        max_consecutive_failures: CRITICAL alert once the brain client's
+            failure streak reaches this. 3 is ~3 consecutive cycles, enough
+            to rule out a single transient blip but fast enough to catch a
+            provider revocation within minutes. <= 0 disables the check.
+        no_trade_alert_hours: WARNING once no trade has been ENTERED for this
+            long. Deliberately generous (12h): quiet markets legitimately
+            produce no trades, and this system runs entry gates that block
+            the majority of candidates by design, so a short dry spell is
+            normal and must not page anyone. <= 0 disables the check.
+        alert_rate_limit_sec: Minimum gap between Telegram alerts so an
+            ongoing outage doesn't re-alert every tick. Default 3600.
+    """
+    enabled: bool = True
+    watchdog_interval_sec: float = 60.0
+    max_consecutive_failures: int = 3
+    no_trade_alert_hours: float = 12.0
+    alert_rate_limit_sec: float = 3600.0
+
+
+@dataclass
 class BrainLivenessSettings:
     """BrainLivenessWatchdog tunables (2026-07-25 — cross-process hang detection).
 
@@ -5533,6 +5566,7 @@ class Settings:
     worker_liveness: WorkerLivenessSettings = field(default_factory=WorkerLivenessSettings)
     # 2026-07-25 (cross-process hang fix) — BrainLivenessWatchdog tunables.
     brain_liveness: BrainLivenessSettings = field(default_factory=BrainLivenessSettings)
+    trade_activity: TradeActivitySettings = field(default_factory=TradeActivitySettings)
     # Phase 1 (output-quality) — SignalGenerator multi-source classification.
     signal_generator: SignalGeneratorSettings = field(default_factory=SignalGeneratorSettings)
     # Phase 5 (output-quality) — CoinPackage validator thresholds.
@@ -5682,6 +5716,10 @@ class Settings:
         brain_liveness_cfg = _build_brain_liveness(
             toml_data.get("brain_liveness", {}),
         )
+        # 2026-08-18 (silent-outage fix) — TradeActivityWatchdog tunables.
+        trade_activity_cfg = _build_trade_activity(
+            toml_data.get("trade_activity", {}),
+        )
         # Phase 1 (output-quality) — SignalGenerator multi-source classification.
         signal_generator_cfg = _build_signal_generator(
             toml_data.get("signal_generator", {}),
@@ -5744,6 +5782,7 @@ class Settings:
             layer_manager=layer_manager_cfg,
             worker_liveness=worker_liveness_cfg,
             brain_liveness=brain_liveness_cfg,
+            trade_activity=trade_activity_cfg,
             signal_generator=signal_generator_cfg,
             coin_package_validator=coin_package_validator_cfg,
             entry_volume_gate=entry_volume_gate_cfg,
@@ -7102,6 +7141,22 @@ def _build_worker_liveness(data: dict[str, Any]) -> WorkerLivenessSettings:
         watchdog_interval_sec=float(data.get("watchdog_interval_sec", 30.0)),
         first_tick_grace_sec=float(data.get("first_tick_grace_sec", 90.0)),
         overdue_multiplier=float(data.get("overdue_multiplier", 2.0)),
+        alert_rate_limit_sec=float(data.get("alert_rate_limit_sec", 3600.0)),
+    )
+
+
+def _build_trade_activity(data: dict[str, Any]) -> "TradeActivitySettings":
+    """Build TradeActivitySettings from [trade_activity] TOML section.
+
+    2026-08-18 (silent-outage fix). Defaults: enabled, 60s probe cadence,
+    3 consecutive brain failures -> critical, 12h without a trade ENTRY ->
+    warning, 1 hour alert rate-limit. Missing keys fall back to defaults.
+    """
+    return TradeActivitySettings(
+        enabled=bool(data.get("enabled", True)),
+        watchdog_interval_sec=float(data.get("watchdog_interval_sec", 60.0)),
+        max_consecutive_failures=int(data.get("max_consecutive_failures", 3)),
+        no_trade_alert_hours=float(data.get("no_trade_alert_hours", 12.0)),
         alert_rate_limit_sec=float(data.get("alert_rate_limit_sec", 3600.0)),
     )
 
