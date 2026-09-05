@@ -2459,12 +2459,22 @@ secure_at_3r_r = 1.5               # secured profit (in R) once the middle rung 
 lock_max_pct = 0.0                 # 0 = naturally bounded by the peak
 
 # The trail fraction of R behind the peak (consumed by profit_lock_pct).
-# 2026-08-14 (Phase 1): 0.5 -> 1.5. This is the "how big a pullback closes me"
-# knob. The old 0.5R was tuned on a replay whose realized peaks were ~1R — but
-# that premise was itself a product of this same tight trail (circular). Live
-# forensics show a half-ATR retrace tapped the lock, well inside the 1.09x-ATR
-# median move that was killing trades. 1.5R demands a genuine reversal.
-trail_r = 1.5
+# 2026-08-14 (Phase 1): raised 0.5 -> 1.5.
+# 2026-09-05: REVERTED to 0.5. The Phase 1 change was wrong on THIS knob and
+# the live exit math proves it:
+#     peak=0.942% R=0.575% arm=0.862% lock=0.248% trail_eff=1.207R kept=26%
+# profit_lock_pct computes  lock = peak - effective_trail_r * R,  so a LARGER
+# trail_r places the guaranteed-profit stop LOWER — it hands back more of the
+# peak. At 1.5R the lock sat at +0.248% while the trade was +0.942%: we kept
+# 26% of every winner. Realized wins fell to +0.349% (from +0.687%) while peaks
+# did NOT grow (0.94-0.99% vs a 1.03% baseline). The wider trail bought no extra
+# runway; it only surrendered profit already earned.
+# Two knobs were conflated. arm_r controls WHEN the lock activates — raising it
+# to 1.5 was correct (it stops the lock arming inside the measured 1.09x-ATR
+# noise band) and is KEPT. trail_r controls HOW FAR BEHIND the peak the stop
+# sits, where larger is strictly worse once armed. At 0.5/0.30 the same trade
+# keeps ~74% instead of 26%.
+trail_r = 0.5
 
 # Profit-scaled trail tightening (2026-06-26 give-back fix). The trail coefficient
 # starts at trail_r for young/small movers and decays toward trail_r_floor as the
@@ -2474,10 +2484,13 @@ trail_r = 1.5
 # SHIPPED INERT: trail_r_floor = trail_r = 0.5 makes the term a constant trail_r,
 # byte-identical to the pre-fix half-R trail. Activation is a single flip of
 # trail_r_floor below trail_r (replay-selected) AFTER the operator gate.
-# 2026-08-14 (Phase 1): 0.30 -> 0.75, scaled proportionally with trail_r
-# (0.5->1.5) so the give-back tightening keeps the same RELATIVE shape
-# instead of silently becoming a 5x-tighter clamp on big winners.
-trail_r_floor = 0.75               # ACTIVE: trail tightens toward 0.75R as the peak grows past the knee
+# 2026-08-14 (Phase 1): 0.30 -> 0.75.
+# 2026-09-05: REVERTED to 0.30 alongside trail_r (see above). The two move
+# together: this floor is the value effective_trail_r decays TOWARD as the peak
+# grows, so leaving it at 0.75 would keep handing back ~0.75R of every large
+# winner even after trail_r came back down. 0.30 is the original replay-tuned
+# value.
+trail_r_floor = 0.30               # ACTIVE: trail tightens toward 0.30R as the peak grows past the knee
 trail_tighten_knee_r = 1.0         # no tightening until the peak clears this many R (over-tighten guard)
 trail_tighten_scale_r = 1.0        # R above the knee over which the coefficient decays toward the floor
 

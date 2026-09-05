@@ -4825,7 +4825,12 @@ class AdaptiveExitSettings:
     # "how big a pullback closes me" knob: at 0.5 a mere half-ATR retrace
     # tapped the lock, which is inside the 1.09x-ATR median move that was
     # killing trades. 1.5R requires a genuine 1.5x-ATR reversal instead.
-    trail_r: float = 1.5
+    # 2026-09-05: REVERTED 1.5 -> 0.5. profit_lock_pct computes
+    # lock = peak - effective_trail_r * R, so a LARGER trail_r puts the
+    # profit stop LOWER and hands back more of the peak. Live evidence:
+    # peak=0.942% lock=0.248% kept=26%. arm_r (WHEN the lock arms) stays
+    # at 1.5; only this knob (HOW FAR BEHIND the peak) is reverted.
+    trail_r: float = 0.5
 
     # ── Profit-scaled trail tightening (2026-06-26 give-back fix). ──
     # The effective trail coefficient starts at trail_r and decays toward
@@ -4837,7 +4842,9 @@ class AdaptiveExitSettings:
     # 2026-08-14 (Phase 1): raised 0.5 -> 1.5 to stay == trail_r (inert by
     # default, per this field's original design). config.toml activates it
     # at a proportionally-scaled 0.75 (was 0.30 against a 0.5 trail_r).
-    trail_r_floor: float = 1.5         # = trail_r → inert; (0, trail_r] when active
+    # 2026-09-05: back to 0.5 so it stays == trail_r (inert by default, per
+    # this field's original design). config.toml activates it at 0.30.
+    trail_r_floor: float = 0.5         # = trail_r → inert; (0, trail_r] when active
     trail_tighten_knee_r: float = 1.0  # no tightening until the peak clears this many R
     trail_tighten_scale_r: float = 1.0 # R above the knee over which the coefficient decays
 
