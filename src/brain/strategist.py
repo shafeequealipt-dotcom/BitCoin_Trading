@@ -20,6 +20,7 @@ Claude returns:
 
 import asyncio
 import json
+import math
 import time
 
 from src.core.log_context import ctx, new_decision_id, get_did
@@ -145,24 +146,31 @@ def _book_tilt_label(
 _PROMPT_CALIBRATION_TOKENS = (
     "__DEAD_THIN_VOL_RATIO__",
     "__HEAVY_ATTEMPTS_COUNT__",
+    "__MIN_RR_RATIO__",
 )
 
 
 def _resolve_prompt_calibration(
     template: str, *, thin_vol_ratio: float, heavy_attempts: int,
+    min_rr_ratio: float = 1.5,
 ) -> str:
     """Inject the centralized skip-criteria thresholds into a CALL_A
     system-prompt template (Element 1, 2026-06-11).
 
     thin_vol_ratio renders 2dp (the Regime line renders vol_ratio 3dp;
     at-or-below comparison stays unambiguous). heavy_attempts renders
-    as a plain integer. Unknown tokens are left intact — the caller
-    logs STRAT_PROMPT_TOKEN_UNRESOLVED if any survive.
+    as a plain integer. min_rr_ratio (execution-geometry alignment,
+    2026-09-16) is the SAME ``[risk].min_rr_ratio`` SLTPValidator
+    enforces before placement, rendered compactly ("1.5") so the words
+    the brain reads and the gate that rejects it can never drift apart.
+    Unknown tokens are left intact — the caller logs
+    STRAT_PROMPT_TOKEN_UNRESOLVED if any survive.
     """
     return (
         template
         .replace("__DEAD_THIN_VOL_RATIO__", f"{thin_vol_ratio:.2f}")
         .replace("__HEAVY_ATTEMPTS_COUNT__", str(int(heavy_attempts)))
+        .replace("__MIN_RR_RATIO__", f"{float(min_rr_ratio):g}")
     )
 
 
@@ -333,7 +341,7 @@ DIRECTION BY REGIME (PER-COIN — there is NO global direction bias):
 - Coins without a per-coin regime tag (UNKNOWN): trade on that coin's OWN TA/structure (X-RAY, levels, signal) — do NOT fall back to any market-wide bias.
 - ranging: BOTH directions — buy at support, sell at resistance, mean-reversion plays.
 - volatile: BOTH directions — follow momentum, wider stops, ride the volatility.
-- dead: BOTH directions — scalp micro-moves, tight TP from VOL data (0.3-0.5%), buy support sell resistance.
+- dead: BOTH directions, but usually a SKIP — a dead tape rarely moves far enough to clear round-trip costs and the entry gates reject it. Take one only on clear structure (buy support, sell resistance) with a TP that still meets that coin's "Min TP distance".
 - RISK-REWARD READ (both sides — NEUTRAL, no lean): the "RR by direction" line shows each side's reward-to-risk. RR is ONE input, NOT a command to take the higher-RR side. Read an extreme one-sided RR critically: when one side's RR is many times the other's, it almost always means price has ALREADY travelled far past the structure on the low-RR side, so that side's reward is spent while the high-RR side is only the distance back to a zone price already left — a "reclaim hope", not a confirmed edge (its anchoring level may be mitigated/spent even when invalid=N). Do NOT take a side merely because its RR is higher. Decide each coin's direction from the WEIGHT of all its evidence together — the coin's own per-coin regime, a valid un-mitigated structural level, the signal, and the ensemble — with NO default lean to either side. Take a side only when that evidence agrees AND that side has real reward room. When the higher-RR side lacks confirmation and the confirmed side lacks room, prefer the CONFIRMED side at SMALL size with an early trailing target to ride momentum into open space — skip only when BOTH sides genuinely lack confirmation. A side with no prior trade history is fine when the full evidence supports it.
 
 FEAR & GREED — market context, NEUTRAL on direction:
@@ -342,7 +350,7 @@ FEAR & GREED — market context, NEUTRAL on direction:
   * Trending down + fear = the short is CONFIRMED (fear accelerates the trend) — do NOT flip to long just because fear is high.
   * Trending up + fear, or fear at tested support = possible oversold long, only if the coin's structure confirms.
   * Ranging + fear = trade the range boundary the structure supports (support OR resistance).
-  * Dead + fear = careful scalps with tight TP, either direction.
+  * Dead + fear = careful scalps, either direction — the TP must still meet the coin's "Min TP distance".
 - Extreme greed (F&G > 80): can mark exhaustion. Trending up + greed: protect/trail longs; trending down + greed, or greed at tested resistance: possible short.
 - Neutral (F&G 30-70): ignore and focus on TA and regime.
 
@@ -350,7 +358,7 @@ FOR EACH NEW TRADE, SPECIFY:
 - symbol: exact symbol (e.g., ETHUSDT)
 - direction: Buy or Sell (you CAN short)
 - stop_loss_price: EXACT price below support (buys) or above resistance (sells)
-- take_profit_price: EXACT price at nearest resistance (buys) or support (sells)
+- take_profit_price: EXACT price at a structural target — resistance (buys) or support (sells) — that is AT LEAST __MIN_RR_RATIO__x your SL distance from entry. Each candidate's "Min TP distance" line gives that minimum for an SL placed AT its Vol stop floor; if your SL is wider, widen the TP by the same proportion, and leave a little room above the minimum. If the nearest level is closer than that, target the next level beyond it. A TP nearer than __MIN_RR_RATIO__x the SL distance is REJECTED before the order is placed. The trailing exit banks profit well before TP, so TP is the ceiling for a runner, not the expected exit.
 - max_hold_minutes: how long before auto-close (30-120; PREFER 45-90 — trades need room to reach their target, and a position closed while still flat is just a fee paid for nothing)
 - leverage: 1-5x based on conviction
 - size_usd is the MARGIN (the cash) you commit for THIS trade — NOT the position size. Your actual exchange position = size_usd x leverage, so do NOT multiply by leverage yourself. The ACCOUNT block gives the per-trade MARGIN budget ("Per-trade size limit: $Y" = Usable / Maximum concurrent positions), "Available for new trades" (margin still free), and "Maximum concurrent positions" (N). A NEW CYCLE RUNS EVERY ~5 MINUTES and positions ACCUMULATE toward N, so do NOT spend the whole pool now. Set size_usd to about that per-trade margin budget, scaled by conviction (strong setup a bit more, borderline a bit less). Keep the sum of your trades' size_usd within "Available for new trades"; leave room for the trades the next cycles will open. Probe-size trades are not wanted, but neither is draining the book in one cycle. For a quick small scalp or a borderline both-direction play, deliberately size SMALLER (well under the per-trade budget) — small size on a short hold is how you take more genuine plays without over-committing to any one read.
@@ -388,13 +396,13 @@ RULES:
    - Coins without a per-coin regime tag (UNKNOWN): trade on that coin's OWN TA/structure; do NOT fall back to any market-wide bias.
    - ranging or volatile: both directions acceptable — let TA decide.
 7. VOLATILITY-ADAPTIVE TARGETS (MANDATORY): Each coin shows VOL=class ATR%=X% recTP=Y% recSL=Z%.
-    - Use recTP% and recSL% as your STARTING POINT for each coin's TP/SL.
-    - CRITICAL — Set TP at minimum 1.5x your SL distance. Aim for 2x on directional setups. Never set SL wider than TP. Trades with SL wider than TP lose money even when they win more often.
-    - Dead/Low volatility: TIGHT targets. Set SL at 0.3-0.5% and TP at minimum 2x your SL distance (0.6-1.0%). Do NOT set TP at the same distance as SL.
-    - Medium volatility: Standard targets (1-2% TP). Set SL at 0.5-1.0%.
-    - High/Extreme volatility: WIDER targets (3-5%+ TP). Ride the move. SL at 1.5-2.5%.
+    - SL comes from rule 4 (at or beyond the Vol stop floor, never tighter than 1.5%) — a recSL% below that floor does NOT apply. Use recTP% only as a starting point for TP.
+    - CRITICAL — Set TP at minimum __MIN_RR_RATIO__x your SL distance (the coin's "Min TP distance" line). Aim for 2x on directional setups. Never set SL wider than TP. A TP nearer than __MIN_RR_RATIO__x the SL distance is rejected before the order is placed.
+    - Dead/Low volatility: usually SKIP — too small a move to clear round-trip costs. If taken: SL at the Vol stop floor, TP at least __MIN_RR_RATIO__x that distance.
+    - Medium volatility: SL at the Vol stop floor; TP __MIN_RR_RATIO__-2x the SL distance.
+    - High/Extreme volatility: SL at the Vol stop floor (often 2-4%); TP 2x+ the SL distance. Ride the move.
     - Convert TP%/SL% to EXACT PRICES using the coin's current price.
-    - If no VOL data shown, use medium defaults: 1.5% TP, 1.0% SL
+    - If no VOL data shown: SL 1.5%, TP 3.0%
 8. Hold times: PREFER short holds — 15-25 min for quick scalps and mean-reversion snaps (most trades close below +1%, so bank the move fast), 25-45 min for standard setups, up to 60 min only for genuine momentum with room to run. Shorter holds turn the book over and surface more genuine plays per session
 9. size_usd — PROPER FUNDING: size_usd IS the MARGIN (cash) you commit per trade — set it to about the per-trade margin budget ("Per-trade size limit" = Usable / Maximum concurrent positions), scaled by conviction. Do NOT multiply by leverage yourself (the system applies your leverage to get the position). Keep the sum of size_usd within "Available for new trades"; never drain the whole pool in one cycle.
 10. If TA indicators show RSI=50, MACD=0, ADX=0 for a coin — you have NO data for that coin. Do NOT trade it.
@@ -539,6 +547,23 @@ TRADE_SYSTEM_PROMPT_PREMISE_VERSION = 2
 # is aimed, not reduced. Bump is the sentinel — grep
 # STRAT_TRADE_PROMPT_VERSION method_version=2.
 TRADE_SYSTEM_PROMPT_METHOD_VERSION = 2
+
+# Execution-geometry alignment (2026-09-16) — version of the TP guidance in
+# both trade prompts plus the per-candidate "Min TP distance" line. Before:
+# the LIVE zero-two prompt told the brain to set TP "at nearest resistance /
+# support" and "TIGHT TP" on dead coins, and never mentioned the
+# [risk].min_rr_ratio gate SLTPValidator enforces before placement (TP must
+# be >= min_rr x SL), while rule 4 forces SL >= 1.5%. The nearest level is
+# routinely inside 1.5x a >=1.5% stop, so the order died on a rule the brain
+# was never told: 19 of 36 directives (2026-09-09..16) were rr_below_min,
+# median rejected R:R 0.74, zero trades for 7 days. The legacy prompt's
+# per-class SL numbers (0.3-1.0%) also contradicted its own 1.5% floor.
+# Only 1 of 200 closed trades ever reached its planned TP — the trailing
+# exit closes trades — so stating the minimum costs no realism. Version 1
+# states the requirement (via __MIN_RR_RATIO__) and renders the per-coin
+# minimum. Bump is the sentinel — grep STRAT_TRADE_PROMPT_VERSION
+# exec_geometry_version=1.
+TRADE_SYSTEM_PROMPT_EXEC_GEOMETRY_VERSION = 1
 
 # Five-Fix Follow-Up — Fix 1 (components purity, 2026-06-10). The signal
 # classifier writes internal bookkeeping into the SAME components dict as the
@@ -723,7 +748,7 @@ DIRECTION BY REGIME (PER-COIN — there is NO global direction bias):
 - Coins without a per-coin regime (UNKNOWN): trade on that coin's OWN TA/structure; do NOT fall back to any market-wide bias.
 - ranging: BOTH directions allowed — buy at support, sell at resistance.
 - volatile: BOTH directions — wider stops, follow momentum.
-- dead: BOTH directions but TIGHT TP — scalp micro-moves only.
+- dead: BOTH directions, but usually a SKIP — a dead tape rarely moves far enough to clear round-trip costs and the entry gates reject it. Take one only on clear structure with a TP that still meets that coin's "Min TP distance".
 - RISK-REWARD READ (both sides — NEUTRAL, no lean): the "RR by direction" line shows each side's reward-to-risk. RR is ONE input, NOT a command to take the higher-RR side. Read an extreme one-sided RR critically: when one side's RR is many times the other's, it almost always means price has ALREADY travelled far past the structure on the low-RR side, so that side's reward is spent while the high-RR side is only the distance back to a zone price already left — a "reclaim hope", not a confirmed edge (its anchoring level may be mitigated/spent even when invalid=N). Do NOT take a side merely because its RR is higher. Decide each coin's direction from the WEIGHT of all its evidence together — the coin's own per-coin regime, a valid un-mitigated structural level, the signal, and the ensemble — with NO default lean to either side. Take a side only when that evidence agrees AND that side has real reward room. When the higher-RR side lacks confirmation and the confirmed side lacks room, prefer the CONFIRMED side at SMALL size with an early trailing target to ride momentum into open space — skip only when BOTH sides genuinely lack confirmation. A side with no prior trade history is fine when the full evidence supports it.
 
 FEAR & GREED — market context, NEUTRAL on direction:
@@ -736,7 +761,7 @@ FOR EACH NEW TRADE, SPECIFY:
 - symbol: exact symbol (e.g., ETHUSDT)
 - direction: "Buy" or "Sell" (you CAN short)
 - stop_loss_price: EXACT price below support (buys) or above resistance (sells)
-- take_profit_price: EXACT price at nearest resistance (buys) or support (sells)
+- take_profit_price: EXACT price at a structural target — resistance (buys) or support (sells) — that is AT LEAST __MIN_RR_RATIO__x your SL distance from entry. Each candidate's "Min TP distance" line gives that minimum for an SL placed AT its Vol stop floor; if your SL is wider, widen the TP by the same proportion, and leave a little room above the minimum. If the nearest level is closer than that, target the next level beyond it. A TP nearer than __MIN_RR_RATIO__x the SL distance is REJECTED before the order is placed. The trailing exit banks profit well before TP, so TP is the ceiling for a runner, not the expected exit.
 - max_hold_minutes: 30-120 (PREFER 45-90 — a position closed while still flat is just a fee paid for nothing)
 - leverage: 1-5x based on conviction
 - size_usd is the MARGIN (the cash) you commit for THIS trade — NOT the position size. Your actual exchange position = size_usd x leverage, so do NOT multiply by leverage yourself. The ACCOUNT block gives the per-trade MARGIN budget ("Per-trade size limit: $Y" = Usable / Maximum concurrent positions), "Available for new trades" (margin still free), and "Maximum concurrent positions" (N). A NEW CYCLE RUNS EVERY ~5 MINUTES and positions ACCUMULATE toward N, so do NOT spend the whole pool now. Set size_usd to about that per-trade margin budget, scaled by conviction (strong setup a bit more, borderline a bit less). Keep the sum of your trades' size_usd within "Available for new trades"; leave room for the trades the next cycles will open. Probe-size trades are not wanted, but neither is draining the book in one cycle. For a quick small scalp or a borderline both-direction play, deliberately size SMALLER (well under the per-trade budget) — small size on a short hold is how you take more genuine plays without over-committing to any one read.
@@ -766,7 +791,7 @@ RULES:
 3. SL/TP DIRECTION:
    FOR BUY/LONG: SL BELOW entry, TP ABOVE entry.
    FOR SELL/SHORT: SL ABOVE entry, TP BELOW entry.
-4. SL floor is VOLATILITY-AWARE: place SL at or beyond the candidate's "Vol stop floor" (that coin's own noise band, shown per candidate). Absolute minimum 1.5% from entry — tighter is rejected. Wider stop pairs with proportionally smaller size; dollar risk unchanged.
+4. SL floor is VOLATILITY-AWARE: place SL at or beyond the candidate's "Vol stop floor" (that coin's own noise band, shown per candidate). Absolute minimum 1.5% from entry — tighter is rejected. Wider stop pairs with proportionally smaller size; dollar risk unchanged. The TP must then be at least __MIN_RR_RATIO__x your actual SL distance (the candidate's "Min TP distance" line) — a nearer TP is rejected before placement.
 5. NEVER suggest a [POS] coin — it has an open position.
 6. PER-COIN regime overrides global regime.
 7. Cite the specific evidence block in reasoning.
@@ -1264,6 +1289,8 @@ class ClaudeStrategist:
             f"skip_keys_version={TRADE_SYSTEM_PROMPT_SKIP_KEYS_VERSION} "
             f"premise_version={TRADE_SYSTEM_PROMPT_PREMISE_VERSION} "
             f"method_version={TRADE_SYSTEM_PROMPT_METHOD_VERSION} "
+            f"exec_geometry_version={TRADE_SYSTEM_PROMPT_EXEC_GEOMETRY_VERSION} "
+            f"min_rr_ratio={self._resolved_min_rr_ratio():g} "
             f"target_play_count="
             f"{getattr(getattr(getattr(self, 'settings', None), 'brain', None), 'brain_target_play_count', 3)} "
             f"pref_hold_max="
@@ -1384,6 +1411,7 @@ class ClaudeStrategist:
                     heavy_attempts=int(getattr(
                         _brain_cfg_legacy, "quality_skip_heavy_attempts", 6,
                     )),
+                    min_rr_ratio=self._resolved_min_rr_ratio(),
                 ),
             )
 
@@ -1552,6 +1580,7 @@ class ClaudeStrategist:
                 heavy_attempts=int(getattr(
                     _brain_cfg_cal, "quality_skip_heavy_attempts", 6,
                 )),
+                min_rr_ratio=self._resolved_min_rr_ratio(),
             )
             if any(t in system for t in _PROMPT_CALIBRATION_TOKENS):
                 log.error(
@@ -3706,6 +3735,23 @@ class ClaudeStrategist:
         except Exception as e:
             log.debug("action hint format failed: {err}", err=str(e))
 
+    def _resolved_min_rr_ratio(self) -> float:
+        """The ``[risk].min_rr_ratio`` SLTPValidator enforces before placement.
+
+        Read exactly the way ``WorkerManager`` builds the validator
+        (``float(getattr(risk, "min_rr_ratio", 1.5))``) so the prompt words,
+        the per-coin "Min TP distance" line, and the gate share one number.
+        Falls back to 1.5 (the validator default) when settings are absent
+        or malformed — rendering must never break the prompt build.
+        """
+        try:
+            return float(getattr(
+                getattr(getattr(self, "settings", None), "risk", None),
+                "min_rr_ratio", 1.5,
+            ))
+        except (TypeError, ValueError):
+            return 1.5
+
     def _format_packages_for_prompt_full(
         self,
         packages: dict,
@@ -4198,6 +4244,22 @@ class ClaudeStrategist:
                             f"(this coin's noise band — place SL at or beyond "
                             f"it; absolute min 1.5%)"
                         )
+                        # Execution-geometry alignment (2026-09-16): show the
+                        # TP minimum SLTPValidator enforces for an SL at this
+                        # floor, from the SAME [risk].min_rr_ratio. Rounded UP
+                        # to 2dp so a TP placed exactly at the shown value can
+                        # never land a hair under the gate (round() first
+                        # strips float noise: 1.8 x 1.5 must read 2.70, not
+                        # 2.71). min_rr <= 0 means the gate is off — no line.
+                        _mrr = self._resolved_min_rr_ratio()
+                        if _mrr > 0.0:
+                            _min_tp = math.ceil(round(_vf * _mrr * 100.0, 6)) / 100.0
+                            coin_lines.append(
+                                f"  Min TP distance: {_min_tp:.2f}% "
+                                f"({_mrr:g}x the stop floor — a TP nearer than "
+                                f"{_mrr:g}x your actual SL distance is rejected "
+                                f"before the order is placed)"
+                            )
             except Exception as e:
                 log.debug(
                     f"STRAT_RICH_BLOCK_FAIL | sym={pkg.symbol} block=vol_floor "
