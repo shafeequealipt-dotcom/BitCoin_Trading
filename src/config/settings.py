@@ -1239,6 +1239,15 @@ class RiskSettings:
     # would be needed just to break even before fees. Same enforcement point
     # as min_sl_distance_pct (F37) and the sl_equals_tp collapse check.
     min_rr_ratio: float = 1.5
+    # 2026-09-19 — headroom (percent) added to the per-coin "Min TP distance"
+    # the CALL_A prompt shows. The line is min_rr_ratio x the coin's Vol stop
+    # floor, but the brain often places its SL slightly WIDER than that floor
+    # while keeping the displayed TP: DOT sl 1.556% / tp 2.324% = 1.49, ASTER
+    # 1.47, RDW 1.44 — each a hair under the 1.5 gate, so a fully-formed trade
+    # was rejected. Headroom lets a modestly wider SL still clear the gate with
+    # the displayed TP. PROMPT ONLY: SLTPValidator still enforces exactly
+    # min_rr_ratio. 0 disables the headroom (shows the bare minimum).
+    min_rr_prompt_headroom_pct: float = 15.0
     max_position_size_pct: float = 10.0
     max_open_positions: int = 5
     daily_loss_limit_pct: float = 5.0
@@ -6270,6 +6279,7 @@ def _build_risk(data: dict[str, Any]) -> RiskSettings:
         default_take_profit_pct=data.get("default_take_profit_pct", 4.0),
         min_sl_distance_pct=data.get("min_sl_distance_pct", 1.5),
         min_rr_ratio=data.get("min_rr_ratio", 1.5),
+        min_rr_prompt_headroom_pct=float(data.get("min_rr_prompt_headroom_pct", 15.0)),
         max_position_size_pct=data.get("max_position_size_pct", 10.0),
         max_open_positions=data.get("max_open_positions", 5),
         daily_loss_limit_pct=data.get("daily_loss_limit_pct", 5.0),

@@ -763,6 +763,12 @@ default_take_profit_pct = 6.0
 # prompt's "TP >= 1.5x SL" rule was never enforced downstream.
 min_sl_distance_pct = 1.5
 min_rr_ratio = 1.5
+# 2026-09-19 — headroom (%) added to the per-coin "Min TP distance" shown to the
+# brain. The brain tends to keep the displayed TP but place its SL a little wider
+# than the Vol stop floor (DOT 1.49, ASTER 1.47, RDW 1.44 -> rejected at the 1.5
+# gate). This lets a modestly wider SL still clear it. PROMPT ONLY — the
+# validator still enforces exactly min_rr_ratio. 0 = show the bare minimum.
+min_rr_prompt_headroom_pct = 15.0
 max_position_size_pct = 20.0
 max_open_positions = 10
 daily_loss_limit_pct = 10.0

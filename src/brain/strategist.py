@@ -3752,6 +3752,20 @@ class ClaudeStrategist:
         except (TypeError, ValueError):
             return 1.5
 
+    def _resolved_min_rr_headroom_pct(self) -> float:
+        """``[risk].min_rr_prompt_headroom_pct`` — headroom on the displayed
+        "Min TP distance" (prompt only; the validator enforces the bare
+        ``min_rr_ratio``). Negative or malformed values fall back safely:
+        headroom must never make the shown minimum LOWER than the gate."""
+        try:
+            v = float(getattr(
+                getattr(getattr(self, "settings", None), "risk", None),
+                "min_rr_prompt_headroom_pct", 15.0,
+            ))
+        except (TypeError, ValueError):
+            return 15.0
+        return v if v > 0.0 else 0.0
+
     def _format_packages_for_prompt_full(
         self,
         packages: dict,
@@ -4251,13 +4265,25 @@ class ClaudeStrategist:
                         # never land a hair under the gate (round() first
                         # strips float noise: 1.8 x 1.5 must read 2.70, not
                         # 2.71). min_rr <= 0 means the gate is off — no line.
+                        # Headroom (2026-09-19): the brain tends to keep the
+                        # displayed TP but place its SL a little wider than the
+                        # floor (DOT 1.49, ASTER 1.47, RDW 1.44 vs the 1.5
+                        # gate). Showing floor x min_rr x (1 + headroom) lets a
+                        # modestly wider SL still clear the gate. Prompt only.
                         _mrr = self._resolved_min_rr_ratio()
+                        _hr = self._resolved_min_rr_headroom_pct()
                         if _mrr > 0.0:
-                            _min_tp = math.ceil(round(_vf * _mrr * 100.0, 6)) / 100.0
+                            _min_tp = math.ceil(round(
+                                _vf * _mrr * (1.0 + _hr / 100.0) * 100.0, 6,
+                            )) / 100.0
+                            _hr_note = (
+                                f" plus {_hr:g}% headroom so a slightly wider SL "
+                                f"still clears it" if _hr > 0.0 else ""
+                            )
                             coin_lines.append(
                                 f"  Min TP distance: {_min_tp:.2f}% "
-                                f"({_mrr:g}x the stop floor — a TP nearer than "
-                                f"{_mrr:g}x your actual SL distance is rejected "
+                                f"({_mrr:g}x the stop floor{_hr_note} — a TP nearer "
+                                f"than {_mrr:g}x your actual SL distance is rejected "
                                 f"before the order is placed)"
                             )
             except Exception as e:
@@ -5377,6 +5403,19 @@ class ClaudeStrategist:
                                         _vol_floors[_vf_sym] = max(
                                             _ref_p, min(_rec, _cap_p),
                                         ) if _rec > 0.0 else _ref_p
+                            # Sentinel (2026-09-19): definitive proof of what
+                            # the brain is shown. floors == candidates means
+                            # every coin carries a Vol stop floor AND a Min TP
+                            # distance line; floors=0 means the volatility
+                            # profiler / scaling flag is not feeding the prompt
+                            # and the brain is placing TPs blind to the gate.
+                            log.info(
+                                f"STRAT_TP_FLOOR_RENDER | floors={len(_vol_floors)} "
+                                f"candidates={len(packages)} "
+                                f"min_rr={self._resolved_min_rr_ratio():g} "
+                                f"headroom_pct={self._resolved_min_rr_headroom_pct():g} "
+                                f"| {ctx()}"
+                            )
                             sections.append(
                                 self._format_packages_for_prompt_full(
                                     packages,
