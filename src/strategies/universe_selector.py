@@ -84,6 +84,10 @@ class SelectionResult:
     removed: list[str] = field(default_factory=list)
     total_tickers: int = 0
     floored_out: int = 0
+    # Coins that cleared the liquidity floor but the active exchange cannot
+    # fill (Shadow tracks a fixed startup snapshot). Counted AFTER the floor
+    # so it reads as "good coins lost to untradeability", not noise.
+    dropped_untradeable: int = 0
     shortlist: list[str] = field(default_factory=list)
     eligible_count: int = 0          # coins at/above the strict floor
     reserve_count: int = 0           # coins in the softened..strict band
@@ -281,6 +285,7 @@ async def select_universe(
     force_keep: set[str] | None = None,
     current: Sequence[str] | None = None,
     concurrency: int = 8,
+    tradeable: set[str] | None = None,
 ) -> SelectionResult:
     """Run the full two-pass selection and return the new universe.
 
@@ -288,6 +293,13 @@ async def select_universe(
     the result regardless of score — the open-position safety property and
     the stable-core decision are honored here, not in the scoring.
     ``current`` is the list being replaced, used only to report add/remove.
+
+    ``tradeable`` (2026-09-19), when non-empty, restricts candidates to
+    symbols the active exchange can actually fill. It is applied in pass one
+    so the target size is filled FROM fillable coins; pruning the finished
+    universe instead would silently shrink it to half. ``None`` or empty
+    means "unknown" and applies no restriction (fail open). Force-kept coins
+    are exempt: an open position is by definition already filled.
     """
     # Force-keep bypasses scoring (open positions / stable core must stay), but
     # must still be a valid universe symbol or it would poison the downstream
@@ -308,6 +320,9 @@ async def select_universe(
     for t in tickers:
         if not passes_liquidity_floor(t, p):
             res.floored_out += 1
+            continue
+        if tradeable and t.symbol not in tradeable and t.symbol not in force_keep:
+            res.dropped_untradeable += 1
             continue
         survivors.append((t, coarse_activity(t)))
     survivors.sort(key=lambda x: x[1], reverse=True)
@@ -395,11 +410,13 @@ async def select_universe(
     res.removed = sorted(cur_set - sel_set)
 
     log.info(
-        "UNIVERSE_SELECTION | total={tot} floored_out={fo} shortlist={sl} "
+        "UNIVERSE_SELECTION | total={tot} floored_out={fo} untradeable_dropped={ut} "
+        "tradeable_known={tk} shortlist={sl} "
         "eligible={el} reserve={rv} ceiling_dropped={cd} choppy_dropped={wd} "
         "insufficient={ins} selected={sel} target={tg} min={mn} softened={soft} "
         "forced={fk} added={ad} removed={rm}",
-        tot=res.total_tickers, fo=res.floored_out, sl=len(shortlist),
+        tot=res.total_tickers, fo=res.floored_out, ut=res.dropped_untradeable,
+        tk=len(tradeable) if tradeable else 0, sl=len(shortlist),
         el=res.eligible_count, rv=res.reserve_count, cd=res.dropped_ceiling,
         wd=res.dropped_whipsaw, ins=res.dropped_insufficient,
         sel=len(selected), tg=p.target_universe_size, mn=p.min_universe_size,

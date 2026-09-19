@@ -486,6 +486,18 @@ class WorkerManager:
         self._services["order_service"] = ord_svc
         self._services["account_service"] = acc_svc
 
+        # Exchange-tradeability contract (2026-09-19): "which symbols can the
+        # ACTIVE exchange fill?". Built from the RAW shadow order service, not
+        # ``ord_svc`` — that is the Transformer's proxy, which only forwards
+        # the mirrored OrderService methods. Mode-aware via the transformer
+        # (only Shadow has a restricted symbol set) and fail-open throughout.
+        # Consumers: universe refresh (choose fillable coins) and the
+        # strategy worker's early skip. See src/core/exchange_tradeability.py.
+        from src.core.exchange_tradeability import ExchangeTradeability
+        self._services["exchange_tradeability"] = ExchangeTradeability(
+            shadow_order, transformer,
+        )
+
         # Brain services — provider-switched (2026-07-06, operator request).
         # "glm_cloudflare" replaces Claude entirely with GLM-5.2 via Cloudflare
         # Workers AI (src/brain/glm_client.py); "claude_code" (the prior

@@ -234,12 +234,34 @@ class UniverseRefreshOrchestrator:
             return vals
 
         tickers = await market.get_all_linear_tickers()
+
+        # Exchange-tradeability contract (2026-09-19): choose only coins the
+        # active exchange can fill. None = unknown / not applicable / flag off
+        # -> select_universe applies no restriction (fail open).
+        tradeable: set[str] | None = None
+        if p.require_exchange_tradeable:
+            _tr = self.services.get("exchange_tradeability")
+            if _tr is not None:
+                try:
+                    tradeable = await _tr.get_tradeable()
+                except Exception as e:
+                    log.warning(
+                        f"UNIVERSE_TRADEABILITY_ERR | err_type={type(e).__name__} "
+                        f"err='{str(e)[:120]}' | proceeding unrestricted | {ctx()}"
+                    )
+        log.info(
+            f"UNIVERSE_TRADEABILITY | enabled={p.require_exchange_tradeable} "
+            f"known={tradeable is not None} "
+            f"n={len(tradeable) if tradeable else 0} trigger={trigger} | {ctx()}"
+        )
+
         result = await select_universe(
             tickers, p,
             fetch_daily=fetch_daily,
             fetch_oi=fetch_oi if (p.oi_enabled and bybit is not None) else None,
             force_keep=force_keep,
             current=current,
+            tradeable=tradeable,
         )
         new_list = result.selected
 

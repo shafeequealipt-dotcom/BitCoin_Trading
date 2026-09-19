@@ -1521,6 +1521,16 @@ exclude_symbols = [
 volatility_saturation_pct = 8.0
 volume_surge_saturation = 3.0
 oi_expansion_saturation_pct = 30.0
+# Exchange-tradeability contract (2026-09-19). The Shadow exchange fills only
+# the coins it selected at ITS startup (top ~100 by turnover); this universe is
+# ranked by volatility over every perpetual, so 47% of brain directives (26 of
+# 55, 2026-09-16..19) targeted coins Shadow could not fill and died at placement
+# with "Symbol not tracked" after passing every quality gate. true = choose the
+# universe only from Shadow-fillable coins and skip any other symbol early
+# (TRADE_SKIP rsn=symbol_not_tradeable). Fail-open: Shadow unreachable, an older
+# Shadow without /api/coins, or a non-Shadow exchange mode = no restriction.
+# false restores the previous behaviour exactly (worker restart only).
+require_exchange_tradeable = true
 
 # Per-coin name aliases for news/sentiment symbol extraction.
 #

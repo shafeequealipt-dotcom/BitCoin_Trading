@@ -58,6 +58,7 @@ COMPONENT_ROUTING: dict[str, str] = {
     "trading_mode": "workers.log",        # core mode-transition events
     "shadow": "workers.log",              # virtual exchange adapter
     "bybit_demo": "workers.log",          # Bybit demo (paper) execution adapter — same role as shadow
+    "exchange_tradeability": "workers.log",  # which symbols the active exchange can fill (Shadow tracks a startup snapshot)
     "strategy": "workers.log",            # AI-generated strategies per src/factory/prompts/generation_prompt.py:8
     # ── Other workers
     "event_buffer": "workers.log",

@@ -2149,6 +2149,15 @@ class UniverseRefreshSettings:
     volatility_saturation_pct: float = 8.0
     volume_surge_saturation: float = 3.0
     oi_expansion_saturation_pct: float = 30.0
+    # Exchange-tradeability contract (2026-09-19). When True (and the active
+    # exchange is Shadow), the universe is chosen only from symbols Shadow can
+    # fill, and the execution path skips any other symbol early with
+    # rsn=symbol_not_tradeable. Before this, 47% of brain directives targeted
+    # symbols Shadow could not fill and died at placement with "Symbol not
+    # tracked". Fail-open by construction (Shadow unreachable / older Shadow /
+    # non-Shadow mode -> no restriction), so True is safe as a default. False
+    # restores the previous behaviour exactly.
+    require_exchange_tradeable: bool = True
 
     def __post_init__(self) -> None:
         if self.enabled:
@@ -6641,6 +6650,7 @@ def _build_universe_refresh(data: dict[str, Any]) -> UniverseRefreshSettings:
         volatility_saturation_pct=float(data.get("volatility_saturation_pct", _default.volatility_saturation_pct)),
         volume_surge_saturation=float(data.get("volume_surge_saturation", _default.volume_surge_saturation)),
         oi_expansion_saturation_pct=float(data.get("oi_expansion_saturation_pct", _default.oi_expansion_saturation_pct)),
+        require_exchange_tradeable=bool(data.get("require_exchange_tradeable", _default.require_exchange_tradeable)),
     )
 
 

@@ -2063,8 +2063,8 @@ class StrategyWorker(SweetSpotWorker):
             (success, reason_code). On success: (True, "ok"). On failure:
             (False, <reason_code>) where reason_code is one of a fixed enum
             ("sanity_reject", "enforcer_block", "survival_block", "xray_skip",
-             "xray_conflict", "unsupported_symbol", "dup_position",
-             "service_missing", "price_fetch_fail", "price_invalid",
+             "xray_conflict", "unsupported_symbol", "symbol_not_tradeable",
+             "dup_position", "service_missing", "price_fetch_fail", "price_invalid",
              "sltp_skip", "entry_volume_gate_blocked", "entry_atr_gate_blocked",
              "entry_recent_loss_gate_blocked", "qty_zero", "order_reject").
             Caller logs TRADE_SKIP.
@@ -2079,6 +2079,31 @@ class StrategyWorker(SweetSpotWorker):
                 f"detail='empty symbol or direction' | {ctx()}"
             )
             return (False, "sanity_reject")
+
+        # Exchange-tradeability pre-flight (2026-09-19). Shadow can only fill
+        # the coins it selected at its own startup; anything else used to
+        # travel the whole chain (thesis reservation, five quality gates, an
+        # order send) and die at placement as an opaque "order_reject" —
+        # 26 of 55 directives, 2026-09-16..19. Checked FIRST because it is a
+        # cached in-memory lookup and everything below is wasted on a symbol
+        # that cannot fill. Only an explicit False skips: None (unknown /
+        # Shadow down / non-Shadow mode) fails open. The universe refresh
+        # already chooses fillable coins; this catches drift between
+        # refreshes and any candidate that reaches here another way.
+        _tr_cfg = getattr(getattr(self.settings, "universe", None), "refresh", None)
+        if _tr_cfg is not None and getattr(_tr_cfg, "require_exchange_tradeable", False):
+            _tradeability = self.services.get("exchange_tradeability") if self.services else None
+            if _tradeability is not None:
+                try:
+                    _fillable = await _tradeability.is_tradeable(symbol)
+                except Exception:
+                    _fillable = None
+                if _fillable is False:
+                    log.warning(
+                        f"TRADE_SKIP | sym={symbol} rsn=symbol_not_tradeable "
+                        f"detail='not in the active exchange tracked set' | {ctx()}"
+                    )
+                    return (False, "symbol_not_tradeable")
 
         # Phase 2 (Layer 3 enforcement) — Approach C, capture-and-pass.
         # Capture the layer_active snapshot AT THE START of the directive

@@ -658,6 +658,37 @@ class ShadowOrderService:
         except Exception:
             return False
 
+    async def get_tradeable_symbols(self) -> set[str] | None:
+        """Symbols the Shadow exchange can fill, or None when unknown.
+
+        Shadow selects its coins once at startup and can only fill those
+        (``OrderEngine`` rejects everything else with "Symbol not tracked"),
+        so this list is what the bot's own universe must be checked against.
+        Shadow-only helper: the live Bybit services have no equivalent
+        (Bybit lists every symbol), so it is deliberately outside the
+        signature-parity contract, and is reached through
+        ``ExchangeTradeability`` rather than the Transformer's order proxy.
+
+        Returns ``None`` — never an empty set — when the answer is
+        unavailable (Shadow unreachable, an older Shadow without
+        ``/api/coins``, or a malformed body). ``None`` means "cannot say"
+        and callers must fail OPEN; an empty set would read as "nothing is
+        tradeable" and halt trading on a transient outage.
+        """
+        data = await _shadow_get_with_retry(
+            self._session,
+            f"{self._url}/api/coins",
+            log=self._log,
+            op="coins",
+            attempts=2,
+        )
+        if not isinstance(data, dict):
+            return None
+        symbols = data.get("symbols")
+        if not isinstance(symbols, list) or not symbols:
+            return None
+        return {str(s) for s in symbols}
+
 
 # =============================================================================
 # ShadowAccountService

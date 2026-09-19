@@ -1432,6 +1432,38 @@ class ScannerWorker(SweetSpotWorker):
             if s not in all_symbols:
                 all_symbols.append(s)
 
+        # Exchange-tradeability (2026-09-19): hold out watch-list coins the
+        # active exchange cannot fill so the brain never spends a play on them
+        # (26 of 55 directives, 2026-09-16..19, died at placement as "Symbol
+        # not tracked"). The universe refresh now selects only fillable coins,
+        # but it runs at 23:00/11:00 UTC — this makes the scanner coherent in
+        # between. Open positions (protected) are never held out. None
+        # (unknown / Shadow down / non-Shadow mode / flag off) = no filtering.
+        _tr_refresh_cfg = getattr(getattr(self.settings, "universe", None), "refresh", None)
+        if _tr_refresh_cfg is not None and getattr(
+            _tr_refresh_cfg, "require_exchange_tradeable", False,
+        ):
+            _tr_svc = self.services.get("exchange_tradeability") if self.services else None
+            if _tr_svc is not None:
+                try:
+                    _fillable = await _tr_svc.get_tradeable()
+                except Exception:
+                    _fillable = None
+                if _fillable:
+                    _untradeable = [
+                        c for c in all_symbols
+                        if c not in protected and c not in _fillable
+                    ]
+                    if _untradeable:
+                        _ut_set = set(_untradeable)
+                        all_symbols = [c for c in all_symbols if c not in _ut_set]
+                        log.info(
+                            f"SCANNER_UNTRADEABLE_EXCLUDED | n={len(_untradeable)} "
+                            f"kept={len(all_symbols)} syms={sorted(_untradeable)} | "
+                            f"exchange cannot fill these; held out of the candidate "
+                            f"list | {ctx()}"
+                        )
+
         # F9 (2026-06-09): loss-only cooldown selection exclusion. When enabled
         # ([apex].loss_cooldown_enabled), a symbol in an active loss cooldown is
         # held OUT of the candidate list so a fresh coin takes its slot (via the

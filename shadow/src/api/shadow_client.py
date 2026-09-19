@@ -88,6 +88,7 @@ def create_api_app(
     app.router.add_get("/api/position/{symbol}", handle_get_position)
     app.router.add_get("/api/balance", handle_get_balance)
     app.router.add_get("/api/ticker/{symbol}", handle_get_ticker)
+    app.router.add_get("/api/coins", handle_get_coins)
     app.router.add_get("/api/health", handle_health)
 
     return app
@@ -233,6 +234,30 @@ async def handle_get_ticker(request: web.Request) -> web.Response:
         })
     except Exception as e:
         log.error("API /ticker error: {err}", err=str(e))
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_get_coins(request: web.Request) -> web.Response:
+    """GET /api/coins — the symbols this exchange can actually fill.
+
+    Reads the SAME predicate OrderEngine.place_order enforces first
+    (``tracked_coins WHERE is_active = 1``), so the answer can never
+    disagree with a placement. A caller that picks symbols independently
+    (the trading bot's volatility-ranked universe) uses this to avoid
+    proposing coins that will only be rejected with "Symbol not tracked":
+    the exchange selects its coins once at startup, so its list is a
+    snapshot, not something the caller's universe can be assumed to match.
+    """
+    try:
+        db = request.app["db"]
+        rows = await db.fetch_all(
+            "SELECT symbol FROM tracked_coins WHERE is_active = 1 "
+            "ORDER BY rank_by_volume"
+        )
+        symbols = [r["symbol"] for r in rows]
+        return web.json_response({"symbols": symbols, "count": len(symbols)})
+    except Exception as e:
+        log.error("API /coins error: {err}", err=str(e))
         return web.json_response({"error": str(e)}, status=500)
 
 
