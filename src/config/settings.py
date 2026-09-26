@@ -613,6 +613,21 @@ class BrainSettings:
     use_claude_code: bool = True
     strategic_interval: int = 180
     watchdog_interval: int = 30
+    # Call-A hang guard (2026-09-26) — bounds strategist.create_trade_plan()
+    # in _run_brain_cycle. Before this it had NO timeout while execution right
+    # after it does (asyncio.wait_for(_execute_new_trades, timeout=300)). A
+    # single stuck await inside prompt-build (unbounded market-data/TA/vol-
+    # profile lookups) froze new-trade-finding for 22h (2026-08-05) and 71.6h
+    # (2026-09-23->26) with the process otherwise healthy — systemd's own
+    # watchdog (WatchdogSec) never sees it because the event loop keeps
+    # ticking. Call-A duration baseline (n=3989, 2026-08-02..09-26): median
+    # 43s, p90 91s, p99 206s, slowest recorded SUCCESS 8min. 900s (15min)
+    # gives ~4.4x that ceiling. On timeout: the stuck task's stack is logged
+    # BEFORE cancelling (so the exact hung await is finally identifiable —
+    # neither prior freeze left any trace of WHERE it hung), the cycle is
+    # skipped (same as any other Call-A failure), and the next cycle tries
+    # again normally. <= 0 disables the guard (restores the unbounded await).
+    call_a_timeout_seconds: float = 900.0
     analysis_interval: int = 1800
     signal_triggered: bool = True
     min_signal_confidence: float = 0.7
@@ -6067,6 +6082,7 @@ def _build_brain(data: dict[str, Any]) -> BrainSettings:
         zenmux_temperature=float(data.get("zenmux_temperature", 0.3)),
         strategic_interval=data.get("strategic_interval", 300),
         watchdog_interval=data.get("watchdog_interval", 30),
+        call_a_timeout_seconds=float(data.get("call_a_timeout_seconds", 900.0)),
         claude_cli_timeout_seconds=data.get("claude_cli_timeout_seconds", 300),
         claude_cli_max_retries=data.get("claude_cli_max_retries", 2),
         claude_cli_min_interval=data.get("claude_cli_min_interval", 2.0),

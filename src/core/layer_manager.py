@@ -11,6 +11,7 @@ Stopping cascades downward: stopping Layer 1 stops Layer 2 and 3.
 import asyncio
 import json
 import time
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -779,6 +780,66 @@ class LayerManager:
             except asyncio.CancelledError:
                 break
 
+    async def _call_a_bounded(self, strategist) -> "StrategicPlan | None":
+        """Call-A hang guard (2026-09-26).
+
+        ``strategist.create_trade_plan()`` had NO timeout while the execution
+        step right after it does (``wait_for(_execute_new_trades,
+        timeout=300)``). A single stuck await inside prompt-build (unbounded
+        market-data/TA/volatility-profile lookups — see
+        ``_build_trade_prompt``) froze new-trade-finding for 22h (2026-08-05)
+        and 71.6h (2026-09-23->26) while the process stayed otherwise
+        healthy: systemd's watchdog only sees whether the event loop is
+        ticking at all, not whether ANY specific coroutine is stuck, so it
+        never fired. Both freezes were found only because the operator asked
+        for status; neither left any trace of WHERE the hang was.
+
+        ``[brain].call_a_timeout_seconds`` (default 900s / 15min — see the
+        config comment for the measured duration baseline this is sized
+        against) bounds this call. On timeout: the stuck task's stack is
+        logged BEFORE it is cancelled — a plain ``wait_for()`` cancels
+        automatically and never gives the caller that chance, which is
+        exactly why neither prior freeze could be diagnosed — then the task
+        is cancelled and awaited so ``create_trade_plan``'s own
+        ``finally`` still emits its paired ``STRAT_CALL_A_END`` (status=
+        cancelled), matching the G1 try/finally-pairing contract that
+        section documents. Raises TimeoutError so the caller's existing
+        ``except Exception`` handling (BRAIN_CYCLE_A_FAIL, cycle-time
+        bookkeeping, advance to Call-B) applies unchanged — this function
+        adds a bound, not a new failure path.
+
+        <= 0 disables the guard and restores the prior unbounded await.
+        """
+        _timeout_s = float(getattr(self.settings.brain, "call_a_timeout_seconds", 900.0))
+        if _timeout_s <= 0.0:
+            return await strategist.create_trade_plan()
+
+        _task = asyncio.ensure_future(strategist.create_trade_plan())
+        _done, _pending = await asyncio.wait({_task}, timeout=_timeout_s)
+        if _task not in _pending:
+            return _task.result()
+
+        try:
+            _stack = _task.get_stack(limit=12)
+            _frames = "".join(traceback.format_stack(f)) if _stack else "(no stack — task not yet started)"
+        except Exception as _stack_err:
+            _frames = f"(stack capture failed: {str(_stack_err)[:120]})"
+        log.error(
+            f"BRAIN_CALL_A_HUNG | timeout_s={_timeout_s:.0f} | "
+            f"create_trade_plan exceeded the bound — this is the exact await "
+            f"it was stuck at:\n{_frames} | {ctx()}"
+        )
+        _task.cancel()
+        try:
+            await _task
+        except asyncio.CancelledError:
+            pass
+        except Exception as _drain_err:
+            log.warning(
+                f"BRAIN_CALL_A_HUNG_DRAIN_ERR | err='{str(_drain_err)[:150]}' | {ctx()}"
+            )
+        raise TimeoutError(f"create_trade_plan exceeded {_timeout_s:.0f}s")
+
     async def _run_brain_cycle(self) -> None:
         """One brain cycle — dispatches to Call A or Call B based on alternation.
 
@@ -838,7 +899,7 @@ class LayerManager:
             elapsed_ms = 0
             try:
                 try:
-                    plan = await strategist.create_trade_plan()
+                    plan = await self._call_a_bounded(strategist)
                 except Exception as _e:
                     elapsed_ms = int((time.time() - t0) * 1000)
                     log.error(

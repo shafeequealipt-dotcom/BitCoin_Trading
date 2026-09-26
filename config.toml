@@ -263,6 +263,15 @@ fear_greed_minutes = 60
 # Uses existing Claude Max subscription ($0 per call)
 enabled = true
 use_claude_code = true
+# Call-A hang guard (2026-09-26). create_trade_plan() had no timeout while
+# execution right after it does (wait_for(_execute_new_trades, timeout=300));
+# a stuck await inside prompt-build froze new-trade-finding for 22h (08-05)
+# then 71.6h (09-23->26) with the process otherwise perfectly healthy -- the
+# systemd watchdog never saw it. Baseline (n=3989): median 43s, p99 206s,
+# slowest SUCCESS 8min. 900s = ~4.4x that. On timeout the stuck task's stack
+# is logged BEFORE cancelling, then the cycle is skipped like any other
+# Call-A failure. <= 0 disables the guard.
+call_a_timeout_seconds = 900.0
 # Brain provider switch. Options:
 #   "claude_code"    → OpenRouter (OpenAI-compatible) via ClaudeClient, model=
 #                      the [brain] `model` key below (deepseek). The historical
