@@ -7,7 +7,14 @@
 
 set -e
 
-PROJECT_DIR="/home/inshadaliqbal786/trading-intelligence-mcp"
+# 2026-09-26: was hardcoded to /home/inshadaliqbal786/trading-intelligence-mcp
+# — a path from an EARLIER deployment, predating the current
+# /home/ubuntu/trading-bot layout. That path never existed on the server this
+# ran on either, so every scheduled run silently hit the "Database not found"
+# branch below and backed up NOTHING — discovered only while migrating to a
+# new server. Derived from the script's own location instead so it can never
+# drift from wherever the repo actually lives again.
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_PATH="$PROJECT_DIR/data/trading.db"
 BACKUP_DIR="$PROJECT_DIR/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
