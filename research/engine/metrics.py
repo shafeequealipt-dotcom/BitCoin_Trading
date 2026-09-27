@@ -62,18 +62,26 @@ def report(trades: pd.DataFrame, cost_model: str = "market") -> dict:
 
 
 def baseline_reports(signals: pd.DataFrame, interval: str, cost_model: str, n_random: int = 200,
-                      seed: int = 1337) -> dict:
+                      seed: int = 1337, runner=None, extra_cols: tuple[str, ...] = ("stop_pct", "target_pct")) -> dict:
     """Random-entry and mirror-direction baselines for the SAME universe/period.
 
     Mirror: identical signals, direction flipped -- answers "did we pick the
     wrong side of a real move, or is there no move to pick a side of at all".
-    Random: same symbols/stop/target/max_hold shape, but entry TIMESTAMPS
-    resampled uniformly from the same symbols' available history -- answers
-    "is this strategy's timing better than an arbitrary moment".
+    Random: same symbols/exit-parameter shape, but entry TIMESTAMPS resampled
+    uniformly from the same symbols' available history -- answers "is this
+    strategy's timing better than an arbitrary moment".
+
+    `runner` defaults to backtest.run (fixed bracket); pass
+    backtest_trailing.run for a trailing-exit strategy. `extra_cols` names
+    whichever exit-parameter columns that runner needs beyond
+    symbol/signal_ts/direction/max_hold -- backtest.run wants
+    ("stop_pct", "target_pct"), backtest_trailing.run wants
+    ("stop_pct", "trail_activate_pct", "trail_pct").
     """
+    run = runner or backtest.run
     mirror_signals = signals.copy()
     mirror_signals["direction"] = -mirror_signals["direction"]
-    mirror_trades = backtest.run(mirror_signals, interval)
+    mirror_trades = run(mirror_signals, interval)
     mirror = report(mirror_trades, cost_model)
 
     rng = np.random.default_rng(seed)
@@ -87,11 +95,12 @@ def baseline_reports(signals: pd.DataFrame, interval: str, cost_model: str, n_ra
         if len(bars) < base["max_hold"] + 2:
             continue
         idx = rng.integers(0, len(bars) - int(base["max_hold"]) - 1)
-        rand_rows.append({
-            "symbol": sym, "signal_ts": bars.index[idx], "direction": int(rng.choice([1, -1])),
-            "stop_pct": base["stop_pct"], "target_pct": base["target_pct"], "max_hold": base["max_hold"],
-        })
-    random_trades = backtest.run(pd.DataFrame(rand_rows), interval) if rand_rows else pd.DataFrame()
+        rand_row = {"symbol": sym, "signal_ts": bars.index[idx], "direction": int(rng.choice([1, -1])),
+                    "max_hold": base["max_hold"]}
+        for col in extra_cols:
+            rand_row[col] = base[col]
+        rand_rows.append(rand_row)
+    random_trades = run(pd.DataFrame(rand_rows), interval) if rand_rows else pd.DataFrame()
     random_rep = report(random_trades, cost_model) if len(random_trades) else {"n": 0}
 
     return {"mirror": mirror, "random": random_rep}

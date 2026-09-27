@@ -9,15 +9,22 @@ from __future__ import annotations
 import importlib
 import sys
 
-from research.engine import backtest, data as rdata, metrics, promotion, walkforward
+from research.engine import backtest, backtest_trailing, data as rdata, metrics, promotion, walkforward
+
+_EXIT_STYLES = {
+    "bracket": (backtest.run, ("stop_pct", "target_pct")),
+    "trailing": (backtest_trailing.run, ("stop_pct", "trail_activate_pct", "trail_pct")),
+}
 
 
 def main(strategy_name: str) -> None:
     mod = importlib.import_module(f"research.strategies.{strategy_name}")
     interval = getattr(mod, "INTERVAL", "1h")
+    exit_style = getattr(mod, "EXIT_STYLE", "bracket")
+    run, extra_cols = _EXIT_STYLES[exit_style]
     universe = rdata.universe()
 
-    print(f"generating signals for {strategy_name} over {len(universe)} symbols ({interval})...")
+    print(f"generating signals for {strategy_name} over {len(universe)} symbols ({interval}, exit={exit_style})...")
     signals = mod.generate_signals(universe)
     print(f"signals: {len(signals)}")
     if signals.empty:
@@ -27,7 +34,7 @@ def main(strategy_name: str) -> None:
     folds = walkforward.time_folds(signals, n_folds=3)
     fold_reports = []
     for i, fold in enumerate(folds, 1):
-        trades = backtest.run(fold, interval)
+        trades = run(fold, interval)
         rep = metrics.report(trades, "market")
         fold_reports.append(rep)
         print(f"  fold {i}: n={rep.get('n')} signal_ts {fold['signal_ts'].min() if len(fold) else '-'} "
@@ -35,9 +42,9 @@ def main(strategy_name: str) -> None:
 
     # OOS = the LAST fold only, tested with parameters fixed before any fold was seen
     # (this strategy has no in-run tuning step -- see the module docstring).
-    oos_trades = backtest.run(folds[-1], interval)
+    oos_trades = run(folds[-1], interval)
     oos_report = metrics.report(oos_trades, "market")
-    baselines = metrics.baseline_reports(folds[-1], interval, "market")
+    baselines = metrics.baseline_reports(folds[-1], interval, "market", runner=run, extra_cols=extra_cols)
 
     result = promotion.evaluate(strategy_name, oos_report, fold_reports, baselines)
     promotion.print_result(result)
@@ -47,6 +54,10 @@ def main(strategy_name: str) -> None:
     oos_maker = metrics.report(oos_trades, "maker")
     print(f"\n  (reference only) OOS at maker cost: expectancy={oos_maker['expectancy_pct']:+.4f}% "
           f"t={oos_maker['t_stat']:.2f}")
+    if exit_style == "trailing" and len(oos_trades):
+        armed_rate = 100 * oos_trades["armed"].mean()
+        print(f"  trailing-stop armed on {armed_rate:.0f}% of OOS trades "
+              f"(the rest stopped out on the INITIAL stop before ever arming)")
 
 
 if __name__ == "__main__":
