@@ -79,3 +79,11 @@ data/logs/data/
 *.bak_*
 *.bak2_*
 src/**/*.bak_*
+
+# Research harness — large/regeneratable, never committed. Reproduce via
+# `research/backfill.py` (reads research/data/universe.json, which IS
+# committed so the universe choice itself is reviewable and reproducible).
+research/data/*.db
+research/data/*.db-wal
+research/data/*.db-shm
+research/logs/*.log
