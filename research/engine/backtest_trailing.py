@@ -28,6 +28,7 @@ from __future__ import annotations
 import pandas as pd
 
 from research.engine import data as rdata
+from research.engine import trailing_logic as tl
 from research.engine.backtest import LookaheadError
 
 
@@ -64,7 +65,7 @@ def run(signals: pd.DataFrame, interval: str = "1h") -> pd.DataFrame:
             continue
 
         sign = 1 if row.direction > 0 else -1
-        stop_level = entry_price * (1 - sign * row.stop_pct / 100)
+        stop_level = tl.initial_stop(entry_price, sign, row.stop_pct)
         armed = False
         extreme = entry_price  # best price seen so far, in the favorable direction
         mfe = mae = 0.0
@@ -78,26 +79,14 @@ def run(signals: pd.DataFrame, interval: str = "1h") -> pd.DataFrame:
             mfe = max(mfe, fav_excursion)
             mae = max(mae, adv_excursion)
 
-            hit_stop = (bar["low"] <= stop_level) if sign > 0 else (bar["high"] >= stop_level)
-            if hit_stop:
+            if tl.check_stop_hit(stop_level, sign, bar["high"], bar["low"]):
                 exit_ts, exit_price, exit_reason = ts, stop_level, "trail_stop" if armed else "initial_stop"
                 break
 
-            # Update the running extreme, then re-check/ratchet the trail.
-            bar_extreme = bar["high"] if sign > 0 else bar["low"]
-            if sign > 0:
-                extreme = max(extreme, bar_extreme)
-            else:
-                extreme = min(extreme, bar_extreme)
-            favorable_pct = (extreme - entry_price) / entry_price * 100 * sign
-            if favorable_pct >= row.trail_activate_pct:
-                armed = True
-                candidate_stop = extreme * (1 - sign * row.trail_pct / 100)
-                # Only ever tighten toward the favorable side, never loosen.
-                if sign > 0:
-                    stop_level = max(stop_level, candidate_stop)
-                else:
-                    stop_level = min(stop_level, candidate_stop)
+            extreme = tl.update_extreme(extreme, sign, bar["high"], bar["low"])
+            stop_level, armed = tl.ratchet_stop(
+                stop_level, extreme, entry_price, sign, row.trail_activate_pct, row.trail_pct,
+            )
 
         gross_pct = (exit_price - entry_price) / entry_price * 100 * sign
         bars_held = int(window.index.get_loc(exit_ts)) + 1

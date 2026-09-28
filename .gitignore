@@ -87,3 +87,7 @@ research/data/*.db
 research/data/*.db-wal
 research/data/*.db-shm
 research/logs/*.log
+research/paper_trade/data/*.db
+research/paper_trade/data/*.db-wal
+research/paper_trade/data/*.db-shm
+research/paper_trade/logs/*.log
